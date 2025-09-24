@@ -5,12 +5,11 @@ ESS-DIVE MCP Server - Main entry point
 This script initializes and runs an MCP server for interacting with the ESS-DIVE API.
 """
 import asyncio
-import sys
 import os
 import json
 import re
 import argparse
-from typing import Dict, List, Optional, Any, Union
+from typing import List, Optional
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import Resource, Prompt
@@ -19,15 +18,20 @@ from client import ESSDiveClient
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description="Run an ESS-DIVE MCP server")
-parser.add_argument("--token", "-t", help="ESS-DIVE API token for authenticated requests")
-parser.add_argument("--name", default="essdive-server", help="Name of the MCP server")
+parser.add_argument("--token", "-t", 
+                   help="ESS-DIVE API token for authenticated requests (can also use ESSDIVE_API_TOKEN env var)")
+parser.add_argument("--name", default="essdive-server", 
+                   help="Name of the MCP server")
 args = parser.parse_args()
+
+# Get API token from CLI argument or environment variable
+api_token = args.token or os.getenv("ESSDIVE_API_TOKEN")
 
 # Create a FastMCP server
 server = FastMCP(args.name)
 
 # Create a client for the ESS-DIVE API with the provided token
-client = ESSDiveClient(api_token=args.token)
+client = ESSDiveClient(api_token=api_token)
 
 # Add resources
 server.add_resource(

@@ -31,13 +31,19 @@ uv add .
 ### Run the Server
 
 ```bash
-python main.py
+uv run python main.py --token YOUR_ESS_DIVE_TOKEN_HERE
 ```
 
 ### Command Line Options
 
 - `--name`: Set the name of the MCP server (default: `essdive-server`)
-- `--token`: Provide an ESS-DIVE API token for authentication (optional)
+- `--token`: Provide an ESS-DIVE API token for authentication
+
+### Environment Variables
+
+The server can also be configured using environment variables:
+
+- `ESSDIVE_API_TOKEN`: Your ESS-DIVE API token. This is used for authenticated requests to the ESS-DIVE API. It can be used as an alternative to the `--token` command-line argument.
 
 ### Using with Claude Desktop
 
@@ -70,6 +76,20 @@ Get detailed information about a specific dataset.
 
 Parameters:
 - `id`: ESS-DIVE dataset identifier
+
+## Available Prompts
+
+### search-datasets
+Search for datasets in ESS-DIVE.
+
+Parameters:
+- `query`: Search query for datasets
+
+### get-dataset-info
+Get detailed information about a specific dataset.
+
+Parameters:
+- `dataset_id`: ID of the dataset to retrieve information for
 
 ## Available Resources
 

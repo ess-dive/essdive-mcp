@@ -12,13 +12,10 @@ import re
 import argparse
 from typing import Dict, List, Optional, Any, Union
 
-# Add the src directory to the Python path so we can import our package
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
-
 from mcp.server.fastmcp import FastMCP
 from mcp.types import Resource, Prompt
 
-from essdive_mcp.client import ESSDiveClient
+from client import ESSDiveClient
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(description="Run an ESS-DIVE MCP server")

@@ -24,4 +24,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/essdive_mcp"]
+include = [
+    "main.py",
+    "client.py"
+]

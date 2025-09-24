@@ -2,7 +2,7 @@
   "name": "ESS-DIVE API",
   "version": "1.0.0",
   "description": "Access to ESS-DIVE datasets through the MCP protocol",
-  "command": "python main.py",
+  "command": "uv run python main.py --token YOUR_ESSDIVE_API_TOKEN",
   "working_directory": "/path/to/essdive-mcp",
   "icon": "🧪",
   "readme": "# ESS-DIVE API for Claude Desktop\n\nThis extension provides access to the ESS-DIVE repository of environmental science datasets through Claude Desktop.\n\n## Features\n\n- Search for datasets in ESS-DIVE using various criteria\n- View detailed information about specific datasets\n- Access environmental science data from DOE's ESS-DIVE repository\n\n## Usage\n\nYou can ask Claude to:\n- Search for datasets related to specific topics\n- Filter datasets by creator, project, keywords, etc.\n- Get detailed information about specific datasets\n\nExample prompts:\n- \"Find datasets about climate change in ESS-DIVE\"\n- \"Get information about this ESS-DIVE dataset: [dataset-id]\"\n\n## Resources\n\n- essdive://search - Search for datasets\n- essdive://dataset-info?id=[dataset-id] - Get information about a specific dataset"

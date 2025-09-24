@@ -37,11 +37,7 @@ python main.py
 ### Command Line Options
 
 - `--name`: Set the name of the MCP server (default: `essdive-server`)
-- `--api-token`: Provide an ESS-DIVE API token for authentication (optional)
-
-### Environment Variables
-
-- `ESSDIVE_API_TOKEN`: Alternative way to provide the ESS-DIVE API token
+- `--token`: Provide an ESS-DIVE API token for authentication (optional)
 
 ### Using with Claude Desktop
 
@@ -82,4 +78,4 @@ Parameters:
 
 ## License
 
-MIT
+BSD

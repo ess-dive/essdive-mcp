@@ -144,6 +144,7 @@ class ESSDiveClient:
                 summary += f"{i}. {ds_data.get('name', 'Untitled')}\n"
                 summary += f"   ID: {dataset.get('id', 'Unknown')}\n"
                 summary += f"   Published: {ds_data.get('datePublished', 'Unknown')}\n"
+                summary += f"   URL: {dataset.get('viewUrl', 'Unknown')}\n"
                 if i < len(datasets):
                     summary += "\n"
             
@@ -157,7 +158,8 @@ class ESSDiveClient:
                 detailed += f"{i}. {ds_data.get('name', 'Untitled')}\n"
                 detailed += f"   ID: {dataset.get('id', 'Unknown')}\n"
                 detailed += f"   Published: {ds_data.get('datePublished', 'Unknown')}\n"
-                
+                detailed += f"   URL: {dataset.get('viewUrl', 'Unknown')}\n"
+
                 # Add description if available
                 description = ds_data.get("description", "")
                 if isinstance(description, list):

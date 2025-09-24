@@ -183,9 +183,10 @@ async def handle_dataset_info(uri: str):
                 file_name = file.get("name", "Unknown")
                 file_size = file.get("contentSize", 0)
                 file_format = file.get("encodingFormat", "Unknown")
-                
-                content += f"- {file_name} ({file_size} KB, {file_format})\n"
-        
+                file_url = file.get("contentUrl", "Unknown")
+                file_id = file.get("identifier", "Unknown")
+                content += f"- {file_name} ({file_size} KB, {file_format}) URL: {file_url} ID: {file_id}\n"
+
         return {"content": content, "mime_type": "text/markdown"}
     
     except Exception as e:
@@ -338,9 +339,10 @@ async def get_dataset(id: str) -> str:
                 file_name = file.get("name", "Unknown")
                 file_size = file.get("contentSize", 0)
                 file_format = file.get("encodingFormat", "Unknown")
-                
-                content += f"- {file_name} ({file_size} KB, {file_format})\n"
-        
+                file_url = file.get("contentUrl", "Unknown")
+                file_id = file.get("identifier", "Unknown")
+                content += f"- {file_name} ({file_size} KB, {file_format}) URL: {file_url} ID: {file_id}\n"
+
         return content
     
     except Exception as e:

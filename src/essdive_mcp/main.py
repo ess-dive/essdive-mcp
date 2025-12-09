@@ -8,11 +8,84 @@ import asyncio
 import os
 import argparse
 import json
+import csv
+import re
+import requests
+from io import StringIO
 from typing import Dict, List, Optional, Any, Union
 import httpx
 from urllib.parse import quote
 
 from fastmcp import FastMCP
+
+
+# Helper functions for FLMD parsing
+def sanitize_tsv_field(value) -> str:
+    """Normalize a value destined for TSV output.
+
+    Replaces any newlines / carriage returns / tabs with a single space,
+    collapses consecutive whitespace, and strips leading/trailing spaces.
+    Non-string values are coerced to string. None becomes empty string.
+    """
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        value = str(value)
+    # Replace problematic control characters with space
+    value = value.replace("\r", " ").replace("\n", " ").replace("\t", " ")
+    # Collapse multiple whitespace to a single space
+    value = re.sub(r"\s+", " ", value)
+    return value.strip()
+
+
+def _norm_header_key(h: str) -> str:
+    """Normalize a CSV header key for matching regardless of case/spacing/punct."""
+    if not isinstance(h, str):
+        h = str(h)
+    return re.sub(r"[^a-z0-9]", "", h.lower())
+
+
+def parse_flmd_file(content: str) -> Dict[str, str]:
+    """Parse an FLMD (File Level Metadata) file and return a mapping of filename -> description.
+
+    Args:
+        content: The FLMD file content as a string
+
+    Returns:
+        Dictionary mapping filename to file description
+    """
+    file_descriptions = {}
+    try:
+        reader = csv.DictReader(StringIO(content))
+        if not reader.fieldnames:
+            return file_descriptions
+
+        # Find the columns for file name and description (case insensitive)
+        filename_col = None
+        description_col = None
+
+        for field in reader.fieldnames:
+            norm_field = _norm_header_key(field)
+            if norm_field in ["filename", "file_name", "name"]:
+                filename_col = field
+            elif norm_field in ["filedescription", "file_description", "description"]:
+                description_col = field
+
+        if not filename_col or not description_col:
+            return file_descriptions
+
+        # Parse the rows
+        for row in reader:
+            filename = row.get(filename_col, "").strip()
+            description = row.get(description_col, "").strip()
+
+            if filename and description:
+                file_descriptions[filename] = sanitize_tsv_field(description)
+
+    except Exception as e:
+        pass
+
+    return file_descriptions
 
 
 class ESSDiveClient:
@@ -372,6 +445,32 @@ def main():
 
         except Exception as e:
             return f"Error retrieving dataset information: {str(e)}"
+
+    @server.tool(
+        name="parse-flmd-file",
+        description="Parse a File Level Metadata (FLMD) CSV file and extract file descriptions",
+    )
+    async def parse_flmd_file_tool(content: str) -> str:
+        """
+        Parse an FLMD (File Level Metadata) file and return a mapping of filenames to descriptions.
+
+        FLMD files are CSV files that contain metadata about data files, with columns for
+        filename and file description. This tool normalizes the CSV headers and extracts
+        the filename-description mapping.
+
+        Args:
+            content: The FLMD CSV file content as a string
+
+        Returns:
+            JSON string mapping filenames to their descriptions
+        """
+        try:
+            file_descriptions = parse_flmd_file(content)
+            return json.dumps(file_descriptions, indent=2)
+        except Exception as e:
+            return json.dumps(
+                {"error": f"Error parsing FLMD file: {str(e)}"}, indent=2
+            )
 
     # Run the server
     asyncio.run(server.run_stdio_async())

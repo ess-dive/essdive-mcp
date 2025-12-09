@@ -291,25 +291,57 @@ ESS_DEEPDIVE_BASE_URL = "https://fusion.ess-dive.lbl.gov/api/v1/deepdive"
 
 
 def search_ess_deepdive(
-    search_term: str, search_field: str = "fieldName", row_start: int = 1, page_size: int = 25
+    field_name: Optional[str] = None,
+    field_definition: Optional[str] = None,
+    field_value_text: Optional[str] = None,
+    field_value_numeric: Optional[Union[int, float]] = None,
+    field_value_date: Optional[str] = None,
+    record_count_min: Optional[int] = None,
+    record_count_max: Optional[int] = None,
+    doi: Optional[List[str]] = None,
+    row_start: int = 1,
+    page_size: int = 25,
 ) -> Dict[str, Any]:
     """
-    Search the ESS-DeepDive API.
+    Search the ESS-DeepDive fusion database for data fields and values.
 
     Args:
-        search_term: The term to search for
-        search_field: Which field to search ('fieldName', 'fieldDefinition', 'fieldValueText')
-        row_start: The starting row for pagination
-        page_size: Number of results per page
+        field_name: Search for a specific field name (max 100 chars)
+        field_definition: Search field definitions (max 100 chars)
+        field_value_text: Search for text field values (case insensitive)
+        field_value_numeric: Filter by numeric value (between min and max summary values)
+        field_value_date: Filter by date value (yyyy-mm-dd or yyyy-mm-ddTHH:MM:SS)
+        record_count_min: Filter by minimum record count
+        record_count_max: Filter by maximum record count
+        doi: Filter by one or more DOIs (up to 100)
+        row_start: The starting row for pagination (default: 1)
+        page_size: Number of results per page (max: 100, default: 25)
 
     Returns:
-        API response containing search results
+        API response containing search results with field metadata
     """
-    params = {
+    params: Dict[str, Any] = {
         "rowStart": row_start,
-        "pageSize": page_size,
-        search_field: search_term,
+        "pageSize": min(page_size, 100),  # Enforce max limit
     }
+
+    if field_name:
+        params["fieldName"] = field_name
+    if field_definition:
+        params["fieldDefinition"] = field_definition
+    if field_value_text:
+        params["fieldValueText"] = field_value_text
+    if field_value_numeric is not None:
+        params["fieldValueNumeric"] = field_value_numeric
+    if field_value_date:
+        params["fieldValueDate"] = field_value_date
+    if record_count_min is not None:
+        params["recordCountMin"] = record_count_min
+    if record_count_max is not None:
+        params["recordCountMax"] = record_count_max
+    if doi:
+        params["doi"] = doi[:100]  # Enforce max 100 DOIs
+
     response = requests.get(ESS_DEEPDIVE_BASE_URL, params=params)
     response.raise_for_status()
     return response.json()
@@ -317,24 +349,23 @@ def search_ess_deepdive(
 
 def get_ess_deepdive_dataset(doi: str, file_path: str) -> Dict[str, Any]:
     """
-    Get detailed information about a specific dataset in ESS-DeepDive.
+    Get detailed field information for a specific dataset file in ESS-DeepDive.
 
     Args:
-        doi: The DOI of the dataset (with or without 'doi:' prefix)
-        file_path: The file path within the dataset
+        doi: The DOI of the dataset (must include 'doi:' prefix, format: doi:10.xxxx/...)
+        file_path: The dataset file path
 
     Returns:
-        API response containing dataset details
+        API response containing detailed field information
     """
     # Ensure DOI has the correct format
     if not doi.startswith("doi:"):
         doi = f"doi:{doi}"
 
-    params = {
-        "doi": doi,
-        "file_path": file_path,
-    }
-    response = requests.get(ESS_DEEPDIVE_BASE_URL, params=params)
+    # Construct the URL with the doi:file_path format
+    url = f"{ESS_DEEPDIVE_BASE_URL}/{doi}:{file_path}"
+
+    response = requests.get(url)
     response.raise_for_status()
     return response.json()
 
@@ -584,34 +615,117 @@ def main():
         description="Search the ESS-DeepDive fusion database for data fields and variables",
     )
     def search_ess_deepdive_tool(
-        search_term: str,
-        search_field: str = "fieldName",
+        field_name: Optional[str] = None,
+        field_definition: Optional[str] = None,
+        field_value_text: Optional[str] = None,
+        field_value_numeric: Optional[Union[int, float]] = None,
+        field_value_date: Optional[str] = None,
+        record_count_min: Optional[int] = None,
+        record_count_max: Optional[int] = None,
+        doi: Optional[str] = None,
         row_start: int = 1,
         page_size: int = 25,
+        max_pages: Optional[int] = None,
     ) -> str:
         """
-        Search the ESS-DeepDive fusion database.
+        Search the ESS-DeepDive fusion database for data fields and values.
 
         The ESS-DeepDive database contains raw data from many ESS-DIVE datasets.
-        You can search by field names, definitions, or values.
+        Search by field names, definitions, values, or record counts.
 
         Args:
-            search_term: The term to search for
-            search_field: Which field to search in ('fieldName', 'fieldDefinition', 'fieldValueText')
-            row_start: The starting row for pagination
-            page_size: Number of results per page (max 200)
+            field_name: Search for a specific field name (max 100 chars)
+            field_definition: Search field definitions (max 100 chars)
+            field_value_text: Search for text field values (case insensitive)
+            field_value_numeric: Filter by numeric value
+            field_value_date: Filter by date value (yyyy-mm-dd or yyyy-mm-ddTHH:MM:SS)
+            record_count_min: Filter by minimum record count
+            record_count_max: Filter by maximum record count
+            doi: Filter by DOI (comma-separated for multiple)
+            row_start: The starting row for pagination (default: 1)
+            page_size: Number of results per page (max: 100, default: 25)
+            max_pages: Maximum number of pages to fetch (optional, for large result sets)
 
         Returns:
-            JSON string containing search results with field information
+            JSON string containing search results with field metadata and pagination info.
+            If results span multiple pages and max_pages is set, collects results across pages.
         """
         try:
-            result = search_ess_deepdive(
-                search_term=search_term,
-                search_field=search_field,
-                row_start=row_start,
-                page_size=page_size,
-            )
-            return json.dumps(result, indent=2)
+            # Parse DOI string if provided
+            doi_list = None
+            if doi:
+                doi_list = [d.strip() for d in doi.split(",")]
+
+            # If max_pages is specified, paginate through results
+            if max_pages and max_pages > 1:
+                all_results = []
+                current_row = row_start
+                pages_fetched = 0
+
+                while pages_fetched < max_pages:
+                    result = search_ess_deepdive(
+                        field_name=field_name,
+                        field_definition=field_definition,
+                        field_value_text=field_value_text,
+                        field_value_numeric=field_value_numeric,
+                        field_value_date=field_value_date,
+                        record_count_min=record_count_min,
+                        record_count_max=record_count_max,
+                        doi=doi_list,
+                        row_start=current_row,
+                        page_size=page_size,
+                    )
+
+                    # Collect results from this page
+                    if "results" in result:
+                        all_results.extend(result["results"])
+
+                    # Check if there are more pages
+                    page_count = result.get("pageCount", 0)
+                    if not page_count or page_count <= 1:
+                        # No more pages available
+                        break
+
+                    pages_fetched += 1
+                    current_row += page_size
+
+                # Return combined results with metadata
+                return json.dumps(
+                    {
+                        "results": all_results,
+                        "total_results_fetched": len(all_results),
+                        "pages_fetched": pages_fetched + 1,
+                        "note": f"Fetched {pages_fetched + 1} pages. Use row_start and page_size to fetch additional pages.",
+                    },
+                    indent=2,
+                )
+            else:
+                # Single page request
+                result = search_ess_deepdive(
+                    field_name=field_name,
+                    field_definition=field_definition,
+                    field_value_text=field_value_text,
+                    field_value_numeric=field_value_numeric,
+                    field_value_date=field_value_date,
+                    record_count_min=record_count_min,
+                    record_count_max=record_count_max,
+                    doi=doi_list,
+                    row_start=row_start,
+                    page_size=page_size,
+                )
+
+                # Add helpful pagination info to response
+                page_count = result.get("pageCount", 0)
+                if page_count and page_count > 1:
+                    result["pagination_info"] = {
+                        "current_page": 1,
+                        "total_pages": page_count,
+                        "page_size": page_size,
+                        "next_row_start": row_start + page_size,
+                        "note": "Use max_pages parameter to automatically fetch all pages, or manually paginate using row_start",
+                    }
+
+                return json.dumps(result, indent=2)
         except Exception as e:
             return json.dumps(
                 {"error": f"Error searching ESS-DeepDive: {str(e)}"},

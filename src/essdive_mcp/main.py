@@ -14,6 +14,30 @@ from fastmcp import FastMCP
 from client import ESSDiveClient
 
 
+def get_api_key(api_key: Optional[str] = None) -> str:
+    """
+    Get ESS-DIVE API key from parameter or environment variable.
+
+    Args:
+        api_key: Optional API key provided directly.
+
+    Returns:
+        The API key string.
+
+    Raises:
+        ValueError: If no API key is provided or found in environment.
+    """
+    if api_key is None:
+        api_key = os.getenv("ESSDIVE_API_TOKEN")
+
+    if api_key is None:
+        raise ValueError(
+            "ESS-DIVE API key is required. Provide it with --token or set ESSDIVE_API_TOKEN environment variable."
+        )
+
+    return api_key
+
+
 def main():
     """Main entry point for the MCP server."""
     # Parse command-line arguments
@@ -25,8 +49,8 @@ def main():
     )
     args = parser.parse_args()
 
-    # Get API token from CLI argument or environment variable
-    api_token = args.token or os.getenv("ESSDIVE_API_TOKEN")
+    # Get and validate API token
+    api_token = get_api_key(args.token)
 
     # Create a FastMCP server
     server = FastMCP("essdive_mcp")

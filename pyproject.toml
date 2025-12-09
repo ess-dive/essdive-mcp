@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "essdive-mcp"
-version = "0.1.0"
+version = "0.2.0"
 description = "MCP Server for ESS-DIVE API"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -12,19 +12,18 @@ license = { text = "MIT" }
 dependencies = [
     "mcp>=1.6.0",
     "httpx>=0.24.0",
+    "fastmcp>=2.13.3",
+    "requests>=2.28.0",
 ]
 
 [project.scripts]
 essdive-mcp = "main:main"
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.18.0",
 ]
 
 [tool.hatch.build.targets.wheel]
-include = [
-    "main.py",
-    "client.py"
-]
+packages = ["src/essdive_mcp"]

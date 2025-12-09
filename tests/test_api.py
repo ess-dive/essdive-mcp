@@ -213,13 +213,18 @@ class TestESSDiveClient:
             "total": 1
         }
 
-        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
-            mock_response_obj = AsyncMock()
-            mock_response_obj.json.return_value = mock_response
-            mock_response_obj.raise_for_status.return_value = None
-            mock_get.return_value = mock_response_obj
+        mock_response_obj = Mock()
+        mock_response_obj.json.return_value = mock_response
+        mock_response_obj.raise_for_status = Mock()
 
-            result = await client.search_datasets(query="test")
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            result = await client.search_datasets(text="test")
 
             assert result["total"] == 1
             assert result["result"][0]["id"] == "ds1"
@@ -237,11 +242,16 @@ class TestESSDiveClient:
             }
         }
 
-        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
-            mock_response_obj = AsyncMock()
-            mock_response_obj.json.return_value = mock_response
-            mock_response_obj.raise_for_status.return_value = None
-            mock_get.return_value = mock_response_obj
+        mock_response_obj = Mock()
+        mock_response_obj.json.return_value = mock_response
+        mock_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
 
             result = await client.get_dataset("ds1")
 
@@ -258,11 +268,16 @@ class TestESSDiveClient:
             "doi": "10.1234/test"
         }
 
-        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
-            mock_response_obj = AsyncMock()
-            mock_response_obj.json.return_value = mock_response
-            mock_response_obj.raise_for_status.return_value = None
-            mock_get.return_value = mock_response_obj
+        mock_response_obj = Mock()
+        mock_response_obj.json.return_value = mock_response
+        mock_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
 
             result = await client.get_dataset_status("ds1")
 
@@ -279,11 +294,16 @@ class TestESSDiveClient:
             ]
         }
 
-        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
-            mock_response_obj = AsyncMock()
-            mock_response_obj.json.return_value = mock_response
-            mock_response_obj.raise_for_status.return_value = None
-            mock_get.return_value = mock_response_obj
+        mock_response_obj = Mock()
+        mock_response_obj.json.return_value = mock_response
+        mock_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
 
             result = await client.get_dataset_permissions("ds1")
 

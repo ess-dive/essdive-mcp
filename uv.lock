@@ -414,6 +414,7 @@ dependencies = [
     { name = "fastmcp" },
     { name = "httpx" },
     { name = "mcp" },
+    { name = "requests" },
 ]
 
 [package.optional-dependencies]
@@ -429,6 +430,7 @@ requires-dist = [
     { name = "mcp", specifier = ">=1.6.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.0.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.18.0" },
+    { name = "requests", specifier = ">=2.28.0" },
 ]
 provides-extras = ["dev"]
 

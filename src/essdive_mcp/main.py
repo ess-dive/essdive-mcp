@@ -196,6 +196,24 @@ class ESSDiveClient:
             response.raise_for_status()
             return response.json()
 
+    async def get_dataset_permissions(self, identifier: str) -> Dict[str, Any]:
+        """
+        Get sharing permissions for a dataset.
+
+        Args:
+            identifier: The ESS-DIVE unique identifier
+
+        Returns:
+            API response containing dataset permissions information
+        """
+        encoded_identifier = quote(identifier, safe="")
+        url = f"{self.BASE_URL}/packages/{encoded_identifier}/share"
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=self._get_headers())
+            response.raise_for_status()
+            return response.json()
+
     def format_results(
         self, results: Dict[str, Any], format_type: str = "summary"
     ) -> Union[str, Dict[str, Any]]:
@@ -470,6 +488,32 @@ def main():
         except Exception as e:
             return json.dumps(
                 {"error": f"Error parsing FLMD file: {str(e)}"}, indent=2
+            )
+
+    @server.tool(
+        name="get-dataset-permissions",
+        description="Get sharing permissions for a specific dataset",
+    )
+    async def get_dataset_permissions_tool(id: str) -> str:
+        """
+        Get sharing permissions information for a dataset.
+
+        This endpoint returns the sharing permissions for a dataset, including
+        who has access and what permissions they have.
+
+        Args:
+            id: ESS-DIVE dataset identifier
+
+        Returns:
+            JSON string containing the dataset permissions
+        """
+        try:
+            result = await client.get_dataset_permissions(id)
+            return json.dumps(result, indent=2)
+        except Exception as e:
+            return json.dumps(
+                {"error": f"Error retrieving dataset permissions: {str(e)}"},
+                indent=2,
             )
 
     # Run the server

@@ -136,7 +136,11 @@ class ESSDiveClient:
         Returns:
             API response containing search results
         """
-        params: Dict[str, Any] = {"rowStart": row_start, "pageSize": page_size}
+        params: Dict[str, Any] = {}
+
+        # Always include pagination parameters
+        params["rowStart"] = row_start
+        params["pageSize"] = page_size
 
         # Add optional parameters if provided
         if is_public is not None:
@@ -332,47 +336,53 @@ def main():
         query: Optional[str] = None,
         creator: Optional[str] = None,
         provider_name: Optional[str] = None,
-        is_public: Optional[bool] = None,
         date_published: Optional[str] = None,
-        keywords: Optional[List[str]] = None,
+        keywords: Optional[Union[str, List[str]]] = None,
         row_start: int = 1,
-        page_size: int = 10,
+        page_size: int = 25,
         format: str = "summary",
     ) -> str:
         """
         Search for datasets in the ESS-DIVE repository.
 
         Args:
-            query: Search query text
+            query: Search query text (full-text search)
             creator: Filter by dataset creator
             provider_name: Filter by dataset project/provider
-            is_public: If true, only return public packages
-            date_published: Filter by publication date
-            keywords: Search for datasets with specific keywords
+            date_published: Filter by publication date (e.g., "[2016 TO 2023]")
+            keywords: Search for datasets with specific keywords (string or list of strings)
             row_start: The row number to start on (for pagination)
-            page_size: Number of results per page (max 100)
+            page_size: Number of results per page
             format: Format of the results (summary, detailed, raw)
 
         Returns:
             Formatted search results
         """
         try:
+            # Convert keywords to list if it's a string
+            keywords_list = None
+            if keywords:
+                if isinstance(keywords, str):
+                    keywords_list = [keywords]
+                else:
+                    keywords_list = keywords
+
             # If query is provided but no specific text search parameter,
             # use the query as the text search
             text = None
-            if query and not any([creator, provider_name, keywords]):
+            if query and not any([creator, provider_name, keywords_list]):
                 text = query
 
-            # Search for datasets
+            # Search for datasets (always search public datasets)
             result = await client.search_datasets(
                 row_start=row_start,
                 page_size=page_size,
-                is_public=is_public,
+                is_public=True,
                 creator=creator,
                 provider_name=provider_name,
                 text=text,
                 date_published=date_published,
-                keywords=keywords,
+                keywords=keywords_list,
             )
 
             # Format the results

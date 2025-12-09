@@ -286,6 +286,59 @@ class ESSDiveClient:
         return results
 
 
+# ESS-DeepDive API functions
+ESS_DEEPDIVE_BASE_URL = "https://fusion.ess-dive.lbl.gov/api/v1/deepdive"
+
+
+def search_ess_deepdive(
+    search_term: str, search_field: str = "fieldName", row_start: int = 1, page_size: int = 25
+) -> Dict[str, Any]:
+    """
+    Search the ESS-DeepDive API.
+
+    Args:
+        search_term: The term to search for
+        search_field: Which field to search ('fieldName', 'fieldDefinition', 'fieldValueText')
+        row_start: The starting row for pagination
+        page_size: Number of results per page
+
+    Returns:
+        API response containing search results
+    """
+    params = {
+        "rowStart": row_start,
+        "pageSize": page_size,
+        search_field: search_term,
+    }
+    response = requests.get(ESS_DEEPDIVE_BASE_URL, params=params)
+    response.raise_for_status()
+    return response.json()
+
+
+def get_ess_deepdive_dataset(doi: str, file_path: str) -> Dict[str, Any]:
+    """
+    Get detailed information about a specific dataset in ESS-DeepDive.
+
+    Args:
+        doi: The DOI of the dataset (with or without 'doi:' prefix)
+        file_path: The file path within the dataset
+
+    Returns:
+        API response containing dataset details
+    """
+    # Ensure DOI has the correct format
+    if not doi.startswith("doi:"):
+        doi = f"doi:{doi}"
+
+    params = {
+        "doi": doi,
+        "file_path": file_path,
+    }
+    response = requests.get(ESS_DEEPDIVE_BASE_URL, params=params)
+    response.raise_for_status()
+    return response.json()
+
+
 def get_api_key(api_key: Optional[str] = None) -> str:
     """
     Get ESS-DIVE API key from parameter or environment variable.
@@ -523,6 +576,72 @@ def main():
         except Exception as e:
             return json.dumps(
                 {"error": f"Error retrieving dataset permissions: {str(e)}"},
+                indent=2,
+            )
+
+    @server.tool(
+        name="search-ess-deepdive",
+        description="Search the ESS-DeepDive fusion database for data fields and variables",
+    )
+    def search_ess_deepdive_tool(
+        search_term: str,
+        search_field: str = "fieldName",
+        row_start: int = 1,
+        page_size: int = 25,
+    ) -> str:
+        """
+        Search the ESS-DeepDive fusion database.
+
+        The ESS-DeepDive database contains raw data from many ESS-DIVE datasets.
+        You can search by field names, definitions, or values.
+
+        Args:
+            search_term: The term to search for
+            search_field: Which field to search in ('fieldName', 'fieldDefinition', 'fieldValueText')
+            row_start: The starting row for pagination
+            page_size: Number of results per page (max 200)
+
+        Returns:
+            JSON string containing search results with field information
+        """
+        try:
+            result = search_ess_deepdive(
+                search_term=search_term,
+                search_field=search_field,
+                row_start=row_start,
+                page_size=page_size,
+            )
+            return json.dumps(result, indent=2)
+        except Exception as e:
+            return json.dumps(
+                {"error": f"Error searching ESS-DeepDive: {str(e)}"},
+                indent=2,
+            )
+
+    @server.tool(
+        name="get-ess-deepdive-dataset",
+        description="Get detailed field information for a specific dataset file in ESS-DeepDive",
+    )
+    def get_ess_deepdive_dataset_tool(doi: str, file_path: str) -> str:
+        """
+        Get detailed field information for a specific dataset file in ESS-DeepDive.
+
+        This retrieves all fields and their definitions for a specific file in the
+        ESS-DeepDive fusion database.
+
+        Args:
+            doi: The DOI of the dataset (with or without 'doi:' prefix)
+            file_path: The file path within the dataset
+
+        Returns:
+            JSON string containing detailed field information
+        """
+        try:
+            result = get_ess_deepdive_dataset(doi=doi, file_path=file_path)
+            return json.dumps(result, indent=2)
+        except Exception as e:
+            return json.dumps(
+                {"error": f"Error retrieving ESS-DeepDive dataset: {str(e)}"},
                 indent=2,
             )
 

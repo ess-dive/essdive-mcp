@@ -370,6 +370,23 @@ def get_ess_deepdive_dataset(doi: str, file_path: str) -> Dict[str, Any]:
     return response.json()
 
 
+def get_ess_deepdive_file(doi: str, file_path: str) -> Dict[str, Any]:
+    """
+    Retrieve detailed information about a specific file from ESS-DeepDive (Get-Dataset-File endpoint).
+
+    This is an alias for get_ess_deepdive_dataset and returns the same information,
+    including all field metadata and download URLs for the file.
+
+    Args:
+        doi: The DOI of the dataset (with or without 'doi:' prefix)
+        file_path: The file path within the dataset
+
+    Returns:
+        API response containing file information, fields, and download metadata
+    """
+    return get_ess_deepdive_dataset(doi, file_path)
+
+
 def get_api_key(api_key: Optional[str] = None) -> str:
     """
     Get ESS-DIVE API key from parameter or environment variable.
@@ -756,6 +773,72 @@ def main():
         except Exception as e:
             return json.dumps(
                 {"error": f"Error retrieving ESS-DeepDive dataset: {str(e)}"},
+                indent=2,
+            )
+
+    @server.tool(
+        name="get-ess-deepdive-file",
+        description="Retrieve detailed information about a specific file from ESS-DeepDive",
+    )
+    def get_ess_deepdive_file_tool(doi: str, file_path: str) -> str:
+        """
+        Retrieve detailed information about a specific file from ESS-DeepDive (Get-Dataset-File endpoint).
+
+        This endpoint returns comprehensive information about a data file, including:
+        - All field names and their definitions
+        - Data types and summary statistics for each field
+        - File metadata and download information
+        - Record counts and value ranges
+
+        Use this after finding a file of interest from search-ess-deepdive results
+        to get complete field-level metadata before downloading.
+
+        Args:
+            doi: The DOI of the dataset (with or without 'doi:' prefix, format: doi:10.xxxx/...)
+            file_path: The file path within the dataset (e.g., "dataset.zip/data.csv")
+
+        Returns:
+            JSON string containing file information with all field metadata and download URLs
+        """
+        try:
+            result = get_ess_deepdive_file(doi=doi, file_path=file_path)
+
+            # Extract relevant information for user-friendly display
+            if isinstance(result, dict):
+                # Create a summary if we have file information
+                summary = {
+                    "doi": result.get("doi"),
+                    "file_name": result.get("file_name"),
+                    "file_path": result.get("file_path"),
+                }
+
+                # Include fields information if available
+                if "fields" in result:
+                    summary["total_fields"] = len(result["fields"])
+                    summary["field_names"] = [f.get("fieldName") for f in result["fields"]]
+
+                # Include download information if available
+                if "data_download" in result:
+                    download = result["data_download"]
+                    summary["download_info"] = {
+                        "content_size_bytes": download.get("contentSize"),
+                        "encoding_format": download.get("encoding_format"),
+                        "content_url": download.get("contentURL"),
+                    }
+
+                # Return complete result with helpful summary
+                return json.dumps(
+                    {
+                        "summary": summary,
+                        "complete_response": result,
+                    },
+                    indent=2,
+                )
+
+            return json.dumps(result, indent=2)
+        except Exception as e:
+            return json.dumps(
+                {"error": f"Error retrieving ESS-DeepDive file: {str(e)}"},
                 indent=2,
             )
 

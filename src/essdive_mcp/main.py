@@ -286,6 +286,101 @@ class ESSDiveClient:
         return results
 
 
+# Helper functions for identifier conversion
+def _normalize_doi(identifier: str) -> str:
+    """Normalize a DOI to the standard format (doi:10.xxxx/...).
+
+    Args:
+        identifier: A DOI in any common format
+
+    Returns:
+        Normalized DOI in the format doi:10.xxxx/...
+    """
+    identifier = identifier.strip()
+
+    # Remove common DOI URL prefixes
+    if identifier.startswith("https://doi.org/"):
+        identifier = identifier.replace("https://doi.org/", "")
+    elif identifier.startswith("http://doi.org/"):
+        identifier = identifier.replace("http://doi.org/", "")
+    elif identifier.startswith("doi.org/"):
+        identifier = identifier.replace("doi.org/", "")
+
+    # Add doi: prefix if not present
+    if not identifier.startswith("doi:"):
+        identifier = f"doi:{identifier}"
+
+    return identifier
+
+
+def doi_to_essdive_id(doi: str, api_token: Optional[str] = None) -> str:
+    """Convert a DOI to an ESS-DIVE dataset ID by querying the ESS-DIVE API.
+
+    Args:
+        doi: A DOI in any common format (with or without doi: prefix or URLs)
+        api_token: Optional API token for authenticated requests
+
+    Returns:
+        The ESS-DIVE dataset ID
+
+    Raises:
+        ValueError: If the DOI is not found or API call fails
+    """
+    # Normalize the DOI
+    normalized_doi = _normalize_doi(doi)
+
+    # Create client and fetch dataset metadata
+    client = ESSDiveClient(api_token=api_token)
+
+    try:
+        # Use asyncio to run the async function
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(client.get_dataset(normalized_doi))
+            essdive_id = result.get("id")
+            if not essdive_id:
+                raise ValueError(f"No dataset ID found in response for DOI: {doi}")
+            return essdive_id
+        finally:
+            loop.close()
+    except Exception as e:
+        raise ValueError(f"Failed to convert DOI {doi} to ESS-DIVE ID: {str(e)}")
+
+
+def essdive_id_to_doi(essdive_id: str, api_token: Optional[str] = None) -> str:
+    """Convert an ESS-DIVE dataset ID to a DOI by querying the ESS-DIVE API.
+
+    Args:
+        essdive_id: An ESS-DIVE dataset identifier
+        api_token: Optional API token for authenticated requests
+
+    Returns:
+        The DOI in the format doi:10.xxxx/...
+
+    Raises:
+        ValueError: If the ESS-DIVE ID is not found or API call fails
+    """
+    client = ESSDiveClient(api_token=api_token)
+
+    try:
+        # Use asyncio to run the async function
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(client.get_dataset(essdive_id))
+            dataset_meta = result.get("dataset", {})
+            doi = dataset_meta.get("doi")
+            if not doi:
+                raise ValueError(f"No DOI found in metadata for ESS-DIVE ID: {essdive_id}")
+            # Normalize the DOI
+            return _normalize_doi(doi)
+        finally:
+            loop.close()
+    except Exception as e:
+        raise ValueError(f"Failed to convert ESS-DIVE ID {essdive_id} to DOI: {str(e)}")
+
+
 # ESS-DeepDive API functions
 ESS_DEEPDIVE_BASE_URL = "https://fusion.ess-dive.lbl.gov/api/v1/deepdive"
 
@@ -624,6 +719,84 @@ def main():
         except Exception as e:
             return json.dumps(
                 {"error": f"Error retrieving dataset permissions: {str(e)}"},
+                indent=2,
+            )
+
+    @server.tool(
+        name="doi-to-essdive-id",
+        description="Convert a DOI to an ESS-DIVE dataset ID",
+    )
+    def doi_to_essdive_id_tool(doi: str) -> str:
+        """
+        Convert a Digital Object Identifier (DOI) to an ESS-DIVE dataset ID.
+
+        This tool queries the ESS-DIVE API to retrieve the dataset metadata
+        for a given DOI and returns the corresponding ESS-DIVE dataset identifier.
+
+        The DOI can be provided in any common format:
+        - doi:10.xxxx/...
+        - 10.xxxx/...
+        - https://doi.org/10.xxxx/...
+        - http://doi.org/10.xxxx/...
+
+        This is useful when you have a DOI but need to use tools that require
+        the ESS-DIVE dataset ID instead.
+
+        Args:
+            doi: A DOI in any common format
+
+        Returns:
+            JSON string containing the ESS-DIVE dataset ID
+        """
+        try:
+            essdive_id = doi_to_essdive_id(doi, api_token=api_token)
+            return json.dumps(
+                {
+                    "doi": doi,
+                    "essdive_id": essdive_id,
+                },
+                indent=2,
+            )
+        except Exception as e:
+            return json.dumps(
+                {"error": f"Error converting DOI to ESS-DIVE ID: {str(e)}"},
+                indent=2,
+            )
+
+    @server.tool(
+        name="essdive-id-to-doi",
+        description="Convert an ESS-DIVE dataset ID to a DOI",
+    )
+    def essdive_id_to_doi_tool(essdive_id: str) -> str:
+        """
+        Convert an ESS-DIVE dataset ID to a Digital Object Identifier (DOI).
+
+        This tool queries the ESS-DIVE API to retrieve the dataset metadata
+        for a given ESS-DIVE ID and returns the corresponding DOI.
+
+        The returned DOI is normalized to the format: doi:10.xxxx/...
+
+        This is useful when you have an ESS-DIVE dataset ID but need to use
+        tools or services that require the DOI instead.
+
+        Args:
+            essdive_id: An ESS-DIVE dataset identifier
+
+        Returns:
+            JSON string containing the DOI
+        """
+        try:
+            doi = essdive_id_to_doi(essdive_id, api_token=api_token)
+            return json.dumps(
+                {
+                    "essdive_id": essdive_id,
+                    "doi": doi,
+                },
+                indent=2,
+            )
+        except Exception as e:
+            return json.dumps(
+                {"error": f"Error converting ESS-DIVE ID to DOI: {str(e)}"},
                 indent=2,
             )
 

@@ -286,6 +286,202 @@ class ESSDiveClient:
         return results
 
 
+# Helper functions for identifier conversion
+def _normalize_doi(identifier: str) -> str:
+    """Normalize a DOI to the standard format (doi:10.xxxx/...).
+
+    Args:
+        identifier: A DOI in any common format
+
+    Returns:
+        Normalized DOI in the format doi:10.xxxx/...
+    """
+    identifier = identifier.strip()
+
+    # Remove common DOI URL prefixes
+    if identifier.startswith("https://doi.org/"):
+        identifier = identifier.replace("https://doi.org/", "")
+    elif identifier.startswith("http://doi.org/"):
+        identifier = identifier.replace("http://doi.org/", "")
+    elif identifier.startswith("doi.org/"):
+        identifier = identifier.replace("doi.org/", "")
+
+    # Add doi: prefix if not present
+    if not identifier.startswith("doi:"):
+        identifier = f"doi:{identifier}"
+
+    return identifier
+
+
+def doi_to_essdive_id(doi: str, api_token: Optional[str] = None) -> str:
+    """Convert a DOI to an ESS-DIVE dataset ID by querying the ESS-DIVE API.
+
+    Args:
+        doi: A DOI in any common format (with or without doi: prefix or URLs)
+        api_token: Optional API token for authenticated requests
+
+    Returns:
+        The ESS-DIVE dataset ID
+
+    Raises:
+        ValueError: If the DOI is not found or API call fails
+    """
+    # Normalize the DOI
+    normalized_doi = _normalize_doi(doi)
+
+    # Create client and fetch dataset metadata
+    client = ESSDiveClient(api_token=api_token)
+
+    try:
+        # Use asyncio to run the async function
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(client.get_dataset(normalized_doi))
+            essdive_id = result.get("id")
+            if not essdive_id:
+                raise ValueError(f"No dataset ID found in response for DOI: {doi}")
+            return essdive_id
+        finally:
+            loop.close()
+    except Exception as e:
+        raise ValueError(f"Failed to convert DOI {doi} to ESS-DIVE ID: {str(e)}")
+
+
+def essdive_id_to_doi(essdive_id: str, api_token: Optional[str] = None) -> str:
+    """Convert an ESS-DIVE dataset ID to a DOI by querying the ESS-DIVE API.
+
+    Args:
+        essdive_id: An ESS-DIVE dataset identifier
+        api_token: Optional API token for authenticated requests
+
+    Returns:
+        The DOI in the format doi:10.xxxx/...
+
+    Raises:
+        ValueError: If the ESS-DIVE ID is not found or API call fails
+    """
+    client = ESSDiveClient(api_token=api_token)
+
+    try:
+        # Use asyncio to run the async function
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            result = loop.run_until_complete(client.get_dataset(essdive_id))
+            dataset_meta = result.get("dataset", {})
+            doi = dataset_meta.get("doi")
+            if not doi:
+                raise ValueError(f"No DOI found in metadata for ESS-DIVE ID: {essdive_id}")
+            # Normalize the DOI
+            return _normalize_doi(doi)
+        finally:
+            loop.close()
+    except Exception as e:
+        raise ValueError(f"Failed to convert ESS-DIVE ID {essdive_id} to DOI: {str(e)}")
+
+
+# ESS-DeepDive API functions
+ESS_DEEPDIVE_BASE_URL = "https://fusion.ess-dive.lbl.gov/api/v1/deepdive"
+
+
+def search_ess_deepdive(
+    field_name: Optional[str] = None,
+    field_definition: Optional[str] = None,
+    field_value_text: Optional[str] = None,
+    field_value_numeric: Optional[Union[int, float]] = None,
+    field_value_date: Optional[str] = None,
+    record_count_min: Optional[int] = None,
+    record_count_max: Optional[int] = None,
+    doi: Optional[List[str]] = None,
+    row_start: int = 1,
+    page_size: int = 25,
+) -> Dict[str, Any]:
+    """
+    Search the ESS-DeepDive fusion database for data fields and values.
+
+    Args:
+        field_name: Search for a specific field name (max 100 chars)
+        field_definition: Search field definitions (max 100 chars)
+        field_value_text: Search for text field values (case insensitive)
+        field_value_numeric: Filter by numeric value (between min and max summary values)
+        field_value_date: Filter by date value (yyyy-mm-dd or yyyy-mm-ddTHH:MM:SS)
+        record_count_min: Filter by minimum record count
+        record_count_max: Filter by maximum record count
+        doi: Filter by one or more DOIs (up to 100)
+        row_start: The starting row for pagination (default: 1)
+        page_size: Number of results per page (max: 100, default: 25)
+
+    Returns:
+        API response containing search results with field metadata
+    """
+    params: Dict[str, Any] = {
+        "rowStart": row_start,
+        "pageSize": min(page_size, 100),  # Enforce max limit
+    }
+
+    if field_name:
+        params["fieldName"] = field_name
+    if field_definition:
+        params["fieldDefinition"] = field_definition
+    if field_value_text:
+        params["fieldValueText"] = field_value_text
+    if field_value_numeric is not None:
+        params["fieldValueNumeric"] = field_value_numeric
+    if field_value_date:
+        params["fieldValueDate"] = field_value_date
+    if record_count_min is not None:
+        params["recordCountMin"] = record_count_min
+    if record_count_max is not None:
+        params["recordCountMax"] = record_count_max
+    if doi:
+        params["doi"] = doi[:100]  # Enforce max 100 DOIs
+
+    response = requests.get(ESS_DEEPDIVE_BASE_URL, params=params)
+    response.raise_for_status()
+    return response.json()
+
+
+def get_ess_deepdive_dataset(doi: str, file_path: str) -> Dict[str, Any]:
+    """
+    Get detailed field information for a specific dataset file in ESS-DeepDive.
+
+    Args:
+        doi: The DOI of the dataset (must include 'doi:' prefix, format: doi:10.xxxx/...)
+        file_path: The dataset file path
+
+    Returns:
+        API response containing detailed field information
+    """
+    # Ensure DOI has the correct format
+    if not doi.startswith("doi:"):
+        doi = f"doi:{doi}"
+
+    # Construct the URL with the doi:file_path format
+    url = f"{ESS_DEEPDIVE_BASE_URL}/{doi}:{file_path}"
+
+    response = requests.get(url)
+    response.raise_for_status()
+    return response.json()
+
+
+def get_ess_deepdive_file(doi: str, file_path: str) -> Dict[str, Any]:
+    """
+    Retrieve detailed information about a specific file from ESS-DeepDive (Get-Dataset-File endpoint).
+
+    This is an alias for get_ess_deepdive_dataset and returns the same information,
+    including all field metadata and download URLs for the file.
+
+    Args:
+        doi: The DOI of the dataset (with or without 'doi:' prefix)
+        file_path: The file path within the dataset
+
+    Returns:
+        API response containing file information, fields, and download metadata
+    """
+    return get_ess_deepdive_dataset(doi, file_path)
+
+
 def get_api_key(api_key: Optional[str] = None) -> str:
     """
     Get ESS-DIVE API key from parameter or environment variable.
@@ -523,6 +719,299 @@ def main():
         except Exception as e:
             return json.dumps(
                 {"error": f"Error retrieving dataset permissions: {str(e)}"},
+                indent=2,
+            )
+
+    @server.tool(
+        name="doi-to-essdive-id",
+        description="Convert a DOI to an ESS-DIVE dataset ID",
+    )
+    def doi_to_essdive_id_tool(doi: str) -> str:
+        """
+        Convert a Digital Object Identifier (DOI) to an ESS-DIVE dataset ID.
+
+        This tool queries the ESS-DIVE API to retrieve the dataset metadata
+        for a given DOI and returns the corresponding ESS-DIVE dataset identifier.
+
+        The DOI can be provided in any common format:
+        - doi:10.xxxx/...
+        - 10.xxxx/...
+        - https://doi.org/10.xxxx/...
+        - http://doi.org/10.xxxx/...
+
+        This is useful when you have a DOI but need to use tools that require
+        the ESS-DIVE dataset ID instead.
+
+        Args:
+            doi: A DOI in any common format
+
+        Returns:
+            JSON string containing the ESS-DIVE dataset ID
+        """
+        try:
+            essdive_id = doi_to_essdive_id(doi, api_token=api_token)
+            return json.dumps(
+                {
+                    "doi": doi,
+                    "essdive_id": essdive_id,
+                },
+                indent=2,
+            )
+        except Exception as e:
+            return json.dumps(
+                {"error": f"Error converting DOI to ESS-DIVE ID: {str(e)}"},
+                indent=2,
+            )
+
+    @server.tool(
+        name="essdive-id-to-doi",
+        description="Convert an ESS-DIVE dataset ID to a DOI",
+    )
+    def essdive_id_to_doi_tool(essdive_id: str) -> str:
+        """
+        Convert an ESS-DIVE dataset ID to a Digital Object Identifier (DOI).
+
+        This tool queries the ESS-DIVE API to retrieve the dataset metadata
+        for a given ESS-DIVE ID and returns the corresponding DOI.
+
+        The returned DOI is normalized to the format: doi:10.xxxx/...
+
+        This is useful when you have an ESS-DIVE dataset ID but need to use
+        tools or services that require the DOI instead.
+
+        Args:
+            essdive_id: An ESS-DIVE dataset identifier
+
+        Returns:
+            JSON string containing the DOI
+        """
+        try:
+            doi = essdive_id_to_doi(essdive_id, api_token=api_token)
+            return json.dumps(
+                {
+                    "essdive_id": essdive_id,
+                    "doi": doi,
+                },
+                indent=2,
+            )
+        except Exception as e:
+            return json.dumps(
+                {"error": f"Error converting ESS-DIVE ID to DOI: {str(e)}"},
+                indent=2,
+            )
+
+    @server.tool(
+        name="search-ess-deepdive",
+        description="Search the ESS-DeepDive fusion database for data fields and variables",
+    )
+    def search_ess_deepdive_tool(
+        field_name: Optional[str] = None,
+        field_definition: Optional[str] = None,
+        field_value_text: Optional[str] = None,
+        field_value_numeric: Optional[Union[int, float]] = None,
+        field_value_date: Optional[str] = None,
+        record_count_min: Optional[int] = None,
+        record_count_max: Optional[int] = None,
+        doi: Optional[str] = None,
+        row_start: int = 1,
+        page_size: int = 25,
+        max_pages: Optional[int] = None,
+    ) -> str:
+        """
+        Search the ESS-DeepDive fusion database for data fields and values.
+
+        The ESS-DeepDive database contains raw data from many ESS-DIVE datasets.
+        Search by field names, definitions, values, or record counts.
+
+        Args:
+            field_name: Search for a specific field name (max 100 chars)
+            field_definition: Search field definitions (max 100 chars)
+            field_value_text: Search for text field values (case insensitive)
+            field_value_numeric: Filter by numeric value
+            field_value_date: Filter by date value (yyyy-mm-dd or yyyy-mm-ddTHH:MM:SS)
+            record_count_min: Filter by minimum record count
+            record_count_max: Filter by maximum record count
+            doi: Filter by DOI (comma-separated for multiple)
+            row_start: The starting row for pagination (default: 1)
+            page_size: Number of results per page (max: 100, default: 25)
+            max_pages: Maximum number of pages to fetch (optional, for large result sets)
+
+        Returns:
+            JSON string containing search results with field metadata and pagination info.
+            If results span multiple pages and max_pages is set, collects results across pages.
+        """
+        try:
+            # Parse DOI string if provided
+            doi_list = None
+            if doi:
+                doi_list = [d.strip() for d in doi.split(",")]
+
+            # If max_pages is specified, paginate through results
+            if max_pages and max_pages > 1:
+                all_results = []
+                current_row = row_start
+                pages_fetched = 0
+
+                while pages_fetched < max_pages:
+                    result = search_ess_deepdive(
+                        field_name=field_name,
+                        field_definition=field_definition,
+                        field_value_text=field_value_text,
+                        field_value_numeric=field_value_numeric,
+                        field_value_date=field_value_date,
+                        record_count_min=record_count_min,
+                        record_count_max=record_count_max,
+                        doi=doi_list,
+                        row_start=current_row,
+                        page_size=page_size,
+                    )
+
+                    # Collect results from this page
+                    if "results" in result:
+                        all_results.extend(result["results"])
+
+                    # Check if there are more pages
+                    page_count = result.get("pageCount", 0)
+                    if not page_count or page_count <= 1:
+                        # No more pages available
+                        break
+
+                    pages_fetched += 1
+                    current_row += page_size
+
+                # Return combined results with metadata
+                return json.dumps(
+                    {
+                        "results": all_results,
+                        "total_results_fetched": len(all_results),
+                        "pages_fetched": pages_fetched + 1,
+                        "note": f"Fetched {pages_fetched + 1} pages. Use row_start and page_size to fetch additional pages.",
+                    },
+                    indent=2,
+                )
+            else:
+                # Single page request
+                result = search_ess_deepdive(
+                    field_name=field_name,
+                    field_definition=field_definition,
+                    field_value_text=field_value_text,
+                    field_value_numeric=field_value_numeric,
+                    field_value_date=field_value_date,
+                    record_count_min=record_count_min,
+                    record_count_max=record_count_max,
+                    doi=doi_list,
+                    row_start=row_start,
+                    page_size=page_size,
+                )
+
+                # Add helpful pagination info to response
+                page_count = result.get("pageCount", 0)
+                if page_count and page_count > 1:
+                    result["pagination_info"] = {
+                        "current_page": 1,
+                        "total_pages": page_count,
+                        "page_size": page_size,
+                        "next_row_start": row_start + page_size,
+                        "note": "Use max_pages parameter to automatically fetch all pages, or manually paginate using row_start",
+                    }
+
+                return json.dumps(result, indent=2)
+        except Exception as e:
+            return json.dumps(
+                {"error": f"Error searching ESS-DeepDive: {str(e)}"},
+                indent=2,
+            )
+
+    @server.tool(
+        name="get-ess-deepdive-dataset",
+        description="Get detailed field information for a specific dataset file in ESS-DeepDive",
+    )
+    def get_ess_deepdive_dataset_tool(doi: str, file_path: str) -> str:
+        """
+        Get detailed field information for a specific dataset file in ESS-DeepDive.
+
+        This retrieves all fields and their definitions for a specific file in the
+        ESS-DeepDive fusion database.
+
+        Args:
+            doi: The DOI of the dataset (with or without 'doi:' prefix)
+            file_path: The file path within the dataset
+
+        Returns:
+            JSON string containing detailed field information
+        """
+        try:
+            result = get_ess_deepdive_dataset(doi=doi, file_path=file_path)
+            return json.dumps(result, indent=2)
+        except Exception as e:
+            return json.dumps(
+                {"error": f"Error retrieving ESS-DeepDive dataset: {str(e)}"},
+                indent=2,
+            )
+
+    @server.tool(
+        name="get-ess-deepdive-file",
+        description="Retrieve detailed information about a specific file from ESS-DeepDive",
+    )
+    def get_ess_deepdive_file_tool(doi: str, file_path: str) -> str:
+        """
+        Retrieve detailed information about a specific file from ESS-DeepDive (Get-Dataset-File endpoint).
+
+        This endpoint returns comprehensive information about a data file, including:
+        - All field names and their definitions
+        - Data types and summary statistics for each field
+        - File metadata and download information
+        - Record counts and value ranges
+
+        Use this after finding a file of interest from search-ess-deepdive results
+        to get complete field-level metadata before downloading.
+
+        Args:
+            doi: The DOI of the dataset (with or without 'doi:' prefix, format: doi:10.xxxx/...)
+            file_path: The file path within the dataset (e.g., "dataset.zip/data.csv")
+
+        Returns:
+            JSON string containing file information with all field metadata and download URLs
+        """
+        try:
+            result = get_ess_deepdive_file(doi=doi, file_path=file_path)
+
+            # Extract relevant information for user-friendly display
+            if isinstance(result, dict):
+                # Create a summary if we have file information
+                summary = {
+                    "doi": result.get("doi"),
+                    "file_name": result.get("file_name"),
+                    "file_path": result.get("file_path"),
+                }
+
+                # Include fields information if available
+                if "fields" in result:
+                    summary["total_fields"] = len(result["fields"])
+                    summary["field_names"] = [f.get("fieldName") for f in result["fields"]]
+
+                # Include download information if available
+                if "data_download" in result:
+                    download = result["data_download"]
+                    summary["download_info"] = {
+                        "content_size_bytes": download.get("contentSize"),
+                        "encoding_format": download.get("encoding_format"),
+                        "content_url": download.get("contentURL"),
+                    }
+
+                # Return complete result with helpful summary
+                return json.dumps(
+                    {
+                        "summary": summary,
+                        "complete_response": result,
+                    },
+                    indent=2,
+                )
+
+            return json.dumps(result, indent=2)
+        except Exception as e:
+            return json.dumps(
+                {"error": f"Error retrieving ESS-DeepDive file: {str(e)}"},
                 indent=2,
             )
 

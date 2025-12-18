@@ -337,15 +337,18 @@ def doi_to_essdive_id(doi: str, api_token: Optional[str] = None) -> str:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            result = loop.run_until_complete(client.get_dataset(normalized_doi))
+            result = loop.run_until_complete(
+                client.get_dataset(normalized_doi))
             essdive_id = result.get("id")
             if not essdive_id:
-                raise ValueError(f"No dataset ID found in response for DOI: {doi}")
+                raise ValueError(
+                    f"No dataset ID found in response for DOI: {doi}")
             return essdive_id
         finally:
             loop.close()
     except Exception as e:
-        raise ValueError(f"Failed to convert DOI {doi} to ESS-DIVE ID: {str(e)}")
+        raise ValueError(
+            f"Failed to convert DOI {doi} to ESS-DIVE ID: {str(e)}")
 
 
 def essdive_id_to_doi(essdive_id: str, api_token: Optional[str] = None) -> str:
@@ -372,13 +375,15 @@ def essdive_id_to_doi(essdive_id: str, api_token: Optional[str] = None) -> str:
             dataset_meta = result.get("dataset", {})
             doi = dataset_meta.get("doi")
             if not doi:
-                raise ValueError(f"No DOI found in metadata for ESS-DIVE ID: {essdive_id}")
+                raise ValueError(
+                    f"No DOI found in metadata for ESS-DIVE ID: {essdive_id}")
             # Normalize the DOI
             return _normalize_doi(doi)
         finally:
             loop.close()
     except Exception as e:
-        raise ValueError(f"Failed to convert ESS-DIVE ID {essdive_id} to DOI: {str(e)}")
+        raise ValueError(
+            f"Failed to convert ESS-DIVE ID {essdive_id} to DOI: {str(e)}")
 
 
 # ESS-DeepDive API functions
@@ -988,7 +993,8 @@ def main():
                 # Include fields information if available
                 if "fields" in result:
                     summary["total_fields"] = len(result["fields"])
-                    summary["field_names"] = [f.get("fieldName") for f in result["fields"]]
+                    summary["field_names"] = [
+                        f.get("fieldName") for f in result["fields"]]
 
                 # Include download information if available
                 if "data_download" in result:

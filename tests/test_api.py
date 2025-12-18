@@ -1,13 +1,5 @@
 """Tests for ESS-DIVE MCP Server."""
 
-import pytest
-import sys
-import os
-from unittest.mock import Mock, patch, AsyncMock
-
-# Add the src directory to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
-
 from essdive_mcp.main import (
     ESSDiveClient,
     get_api_key,
@@ -21,6 +13,13 @@ from essdive_mcp.main import (
     get_ess_deepdive_dataset,
     get_ess_deepdive_file,
 )
+import pytest
+import sys
+import os
+from unittest.mock import Mock, patch, AsyncMock
+
+# Add the src directory to the path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 
 class TestGetApiKey:
@@ -225,7 +224,8 @@ class TestESSDiveClient:
 
         with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
             mock_client_instance = AsyncMock()
-            mock_client_instance.get = AsyncMock(return_value=mock_response_obj)
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
             mock_client_instance.__aenter__.return_value = mock_client_instance
             mock_client_instance.__aexit__.return_value = None
             mock_client_class.return_value = mock_client_instance
@@ -254,7 +254,8 @@ class TestESSDiveClient:
 
         with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
             mock_client_instance = AsyncMock()
-            mock_client_instance.get = AsyncMock(return_value=mock_response_obj)
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
             mock_client_instance.__aenter__.return_value = mock_client_instance
             mock_client_instance.__aexit__.return_value = None
             mock_client_class.return_value = mock_client_instance
@@ -280,7 +281,8 @@ class TestESSDiveClient:
 
         with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
             mock_client_instance = AsyncMock()
-            mock_client_instance.get = AsyncMock(return_value=mock_response_obj)
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
             mock_client_instance.__aenter__.return_value = mock_client_instance
             mock_client_instance.__aexit__.return_value = None
             mock_client_class.return_value = mock_client_instance
@@ -306,7 +308,8 @@ class TestESSDiveClient:
 
         with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
             mock_client_instance = AsyncMock()
-            mock_client_instance.get = AsyncMock(return_value=mock_response_obj)
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
             mock_client_instance.__aenter__.return_value = mock_client_instance
             mock_client_instance.__aexit__.return_value = None
             mock_client_class.return_value = mock_client_instance
@@ -421,7 +424,8 @@ class TestDoiConversion:
 
         with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
             mock_client_instance = AsyncMock()
-            mock_client_instance.get = AsyncMock(return_value=mock_response_obj)
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
             mock_client_instance.__aenter__.return_value = mock_client_instance
             mock_client_instance.__aexit__.return_value = None
             mock_client_class.return_value = mock_client_instance
@@ -445,7 +449,8 @@ class TestDoiConversion:
 
         with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
             mock_client_instance = AsyncMock()
-            mock_client_instance.get = AsyncMock(return_value=mock_response_obj)
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
             mock_client_instance.__aenter__.return_value = mock_client_instance
             mock_client_instance.__aexit__.return_value = None
             mock_client_class.return_value = mock_client_instance
@@ -465,7 +470,8 @@ class TestDoiConversion:
 
         with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
             mock_client_instance = AsyncMock()
-            mock_client_instance.get = AsyncMock(return_value=mock_response_obj)
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
             mock_client_instance.__aenter__.return_value = mock_client_instance
             mock_client_instance.__aexit__.return_value = None
             mock_client_class.return_value = mock_client_instance
@@ -489,7 +495,8 @@ class TestDoiConversion:
 
         with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
             mock_client_instance = AsyncMock()
-            mock_client_instance.get = AsyncMock(return_value=mock_response_obj)
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
             mock_client_instance.__aenter__.return_value = mock_client_instance
             mock_client_instance.__aexit__.return_value = None
             mock_client_class.return_value = mock_client_instance
@@ -513,7 +520,8 @@ class TestDoiConversion:
 
         with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
             mock_client_instance = AsyncMock()
-            mock_client_instance.get = AsyncMock(return_value=mock_response_obj)
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
             mock_client_instance.__aenter__.return_value = mock_client_instance
             mock_client_instance.__aexit__.return_value = None
             mock_client_class.return_value = mock_client_instance
@@ -536,7 +544,8 @@ class TestDoiConversion:
 
         with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
             mock_client_instance = AsyncMock()
-            mock_client_instance.get = AsyncMock(return_value=mock_response_obj)
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
             mock_client_instance.__aenter__.return_value = mock_client_instance
             mock_client_instance.__aexit__.return_value = None
             mock_client_class.return_value = mock_client_instance
@@ -722,7 +731,8 @@ class TestGetEssDeepDiveDataset:
             mock_response_obj.raise_for_status = Mock()
             mock_get.return_value = mock_response_obj
 
-            result = get_ess_deepdive_dataset("10.1234/test", "dataset.zip/data.csv")
+            result = get_ess_deepdive_dataset(
+                "10.1234/test", "dataset.zip/data.csv")
 
             assert result["doi"] == "doi:10.1234/test"
             assert result["file_path"] == "dataset.zip/data.csv"
@@ -798,7 +808,8 @@ class TestGetEssDeepDiveFile:
             mock_response_obj.raise_for_status = Mock()
             mock_get.return_value = mock_response_obj
 
-            result = get_ess_deepdive_file("10.1234/test", "dataset.zip/data.csv")
+            result = get_ess_deepdive_file(
+                "10.1234/test", "dataset.zip/data.csv")
 
             assert result["file_name"] == "data.csv"
             assert "data_download" in result

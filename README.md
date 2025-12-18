@@ -27,6 +27,20 @@ This project implements a Model Context Protocol server that allows language mod
   - Support for pagination and DOI filtering
   - Download file metadata and information
 
+## Example Queries
+
+### Searching
+
+```
+> Search ESS-DIVE for datasets involving snowfall in Colorado. 
+
+● essdive-mcp - search-datasets (MCP)(query: "snowfall Colorado", page_size: 10, format: "summary")
+  ⎿ {                                                                                                                                                                                                                         
+      "result": "Found 5 datasets. Showing 5 results:\n\n1. Groundwater and Surface Water Flow (GSFLOW) model files to explore bedrock circulation depth and porosity in Copper Creek, Colorado\n   ID: ess-dive-9ea5fe57db73c
+    90-20241024T093714082510\n   Published: 2024\n   URL: https://data.ess-dive.lbl.gov/view/doi:10.15485/2453885\n\n2. Data from: \"Warming and provenance limit tree recruitment across and beyond the elevation range of su
+    …
+```
+
 ## Installation
 
 ### Install from Source
@@ -45,8 +59,19 @@ uv add .
 ### Run the Server
 
 ```bash
-uv run python main.py --token YOUR_ESS_DIVE_TOKEN_HERE
+uv run python src/essdive_mcp/main.py --token YOUR_ESS_DIVE_TOKEN_HERE
 ```
+
+### Use the Server with an Agentic Framework
+
+You may run the server locally, then set it up in your own agentic AI framework to have it interface with the MCP.
+
+With Claude Code, for example, navigate to the project directory, then run this command from the command line:
+
+```
+claude mcp add --transport stdio essdive-mcp --env ESSDIVE_API_TOKEN=YOUR_ESS_DIVE_TOKEN_HERE -- uv run python ./src/essdive_mcp/main.py
+```
+
 
 ### Command Line Options
 

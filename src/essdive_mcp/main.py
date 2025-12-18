@@ -2,7 +2,37 @@
 """
 ESS-DIVE MCP Server - Main entry point
 
-This script initializes and runs an MCP server for interacting with the ESS-DIVE API.
+This module implements a Model Context Protocol (MCP) server that provides
+comprehensive tools for accessing and analyzing data from ESS-DIVE and ESS-DeepDive APIs.
+
+MCP Tools Available:
+
+**Dataset Search & Retrieval:**
+  - search-datasets: Full-text search across ESS-DIVE datasets with filtering by creator,
+    provider, publication date, and keywords. Supports pagination and multiple result formats.
+  - get-dataset: Retrieve detailed metadata for a specific dataset including creators,
+    keywords, description, and available data files.
+  - get-dataset-permissions: Get sharing and access permission information for datasets.
+
+**Identifier Conversion:**
+  - doi-to-essdive-id: Convert Digital Object Identifiers (DOI) to ESS-DIVE dataset IDs.
+    Handles multiple DOI formats (doi:10.xxxx, https://doi.org/10.xxxx, etc.).
+  - essdive-id-to-doi: Convert ESS-DIVE dataset IDs to standardized DOI format.
+
+**File-Level Metadata:**
+  - parse-flmd-file: Parse File Level Metadata (FLMD) CSV files to extract filename and
+    description mappings for dataset files.
+
+**ESS-DeepDive Search & Analysis:**
+  - search-ess-deepdive: Search the ESS-DeepDive fusion database for data fields by name,
+    definition, value (text/numeric/date), and record count. Supports multi-page results.
+  - get-ess-deepdive-dataset: Retrieve detailed field information and metadata for a
+    specific file in the ESS-DeepDive database.
+  - get-ess-deepdive-file: Get comprehensive file-level information including field names,
+    data types, summary statistics, and download metadata from ESS-DeepDive.
+
+Authentication:
+  API token can be provided via --token flag or ESSDIVE_API_TOKEN environment variable.
 """
 import asyncio
 import os

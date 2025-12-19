@@ -264,6 +264,9 @@ async def search_datasets(query: Optional[str] = None,
             keywords=keywords
         )
         
+        if format == "json":
+            return result
+        
         # Format the results
         formatted = client.format_results(result, format)
         
@@ -276,18 +279,22 @@ async def search_datasets(query: Optional[str] = None,
         return f"Error searching for datasets: {str(e)}"
 
 @server.tool(name="get-dataset", description="Get detailed information about a specific dataset")
-async def get_dataset(id: str) -> str:
+async def get_dataset(id: str, format: str = "summary") -> str:
     """
     Get detailed information about a specific dataset.
     
     Args:
         id: ESS-DIVE dataset identifier
+        format: Format of the results (summary, detailed, raw, json)
         
     Returns:
         Formatted dataset information
     """
     try:
         result = await client.get_dataset(id)
+
+        if format == "json":
+            return result
         
         # Format the result
         dataset = result.get("dataset", {})

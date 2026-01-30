@@ -72,6 +72,30 @@ With Claude Code, for example, navigate to the project directory, then run this 
 claude mcp add --transport stdio essdive-mcp --env ESSDIVE_API_TOKEN=YOUR_ESS_DIVE_TOKEN_HERE -- uv run python ./src/essdive_mcp/main.py
 ```
 
+## Skills (Claude Code + Codex)
+
+This repository includes skill definitions under `skills/` that can be used by
+Claude Code and Codex.
+
+### Claude Code
+
+Register the skills plugin:
+
+```
+/plugin marketplace add ./.claude-plugin/marketplace.json
+```
+
+### Codex
+
+Copy or symlink the skill folders into your Codex skills directory (usually
+`~/.codex/skills`), for example:
+
+```
+ln -s "$(pwd)/skills/essdive-datasets" ~/.codex/skills/essdive-datasets
+ln -s "$(pwd)/skills/essdive-identifiers" ~/.codex/skills/essdive-identifiers
+ln -s "$(pwd)/skills/essdeepdive" ~/.codex/skills/essdeepdive
+```
+
 
 ### Command Line Options
 

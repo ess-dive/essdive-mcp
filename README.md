@@ -356,6 +356,22 @@ Retrieve detailed information about a specific file from ESS-DeepDive (Get-Datas
 
 **Use Case:** After finding a file of interest from `search-ess-deepdive`, retrieve complete field-level metadata before downloading.
 
+### Mapping Tools
+
+#### coords-to-map-links
+
+Convert points or a bounding box into map links (GeoJSON via geojson.io and a bounding-box view in OpenStreetMap).
+
+**Parameters:**
+- `points` (optional): List of `[lat, lon]` points
+- `bbox` (optional): `[min_lat, min_lon, max_lat, max_lon]`
+- `zoom` (optional): Zoom level for a centered geojson.io view
+
+**Example:**
+```
+coords-to-map-links with points=[[38.9219, -106.9490]] and zoom=12
+```
+
 ## License
 
 BSD

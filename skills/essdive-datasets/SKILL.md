@@ -38,6 +38,7 @@ claude mcp add --transport stdio essdive-mcp -- uv run python ./src/essdive_mcp/
 - `get-dataset`
 - `get-dataset-permissions`
 - `parse-flmd-file`
+- `coords-to-map-links`
 
 ## Usage examples
 
@@ -69,6 +70,18 @@ Parse a File Level Metadata CSV payload:
 
 ```
 parse-flmd-file with content="filename,file_description\nfile1.csv,Soil moisture data\n"
+```
+
+Create a geojson.io link for a point:
+
+```
+coords-to-map-links with points=[[38.9219, -106.9490]] and zoom=12
+```
+
+Create a geojson.io link for a bounding box:
+
+```
+coords-to-map-links with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
 ```
 
 ## Notes

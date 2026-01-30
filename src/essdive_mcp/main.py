@@ -517,12 +517,15 @@ def get_ess_deepdive_file(doi: str, file_path: str) -> Dict[str, Any]:
     return get_ess_deepdive_dataset(doi, file_path)
 
 
-def get_api_key(api_key: Optional[str] = None) -> str:
+def get_api_key(
+    api_key: Optional[str] = None, token_file: Optional[str] = None
+) -> str:
     """
-    Get ESS-DIVE API key from parameter or environment variable.
+    Get ESS-DIVE API key from parameter, token file, or environment variable.
 
     Args:
         api_key: Optional API key provided directly.
+        token_file: Optional path to a file containing the API key.
 
     Returns:
         The API key string.
@@ -530,12 +533,21 @@ def get_api_key(api_key: Optional[str] = None) -> str:
     Raises:
         ValueError: If no API key is provided or found in environment.
     """
-    if api_key is None:
+    if api_key is None and token_file:
+        try:
+            with open(token_file, "r", encoding="utf-8") as handle:
+                api_key = handle.read().strip()
+        except OSError as exc:
+            raise ValueError(
+                f"Could not read ESS-DIVE token file: {token_file}"
+            ) from exc
+
+    if not api_key:
         api_key = os.getenv("ESSDIVE_API_TOKEN")
 
-    if api_key is None:
+    if not api_key:
         raise ValueError(
-            "ESS-DIVE API key is required. Provide it with --token or set ESSDIVE_API_TOKEN environment variable."
+            "ESS-DIVE API key is required. Provide it with --token, --token-file, or set ESSDIVE_API_TOKEN."
         )
 
     return api_key
@@ -550,10 +562,14 @@ def main():
         "-t",
         help="ESS-DIVE API token for authenticated requests (can also use ESSDIVE_API_TOKEN env var)",
     )
+    parser.add_argument(
+        "--token-file",
+        help="Path to a file containing the ESS-DIVE API token",
+    )
     args = parser.parse_args()
 
     # Get and validate API token
-    api_token = get_api_key(args.token)
+    api_token = get_api_key(args.token, token_file=args.token_file)
 
     # Create a FastMCP server
     server = FastMCP("essdive_mcp")

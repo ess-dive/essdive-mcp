@@ -11,10 +11,25 @@ Run the MCP server locally:
 uv run python src/essdive_mcp/main.py --token YOUR_ESS_DIVE_TOKEN_HERE
 ```
 
+Or provide the token via a file:
+
+```bash
+uv run python src/essdive_mcp/main.py --token-file /path/to/token.txt
+```
+
+Note: the environment variable name is `ESSDIVE_API_TOKEN` (no underscore
+between ESS and DIVE).
+
 Register with Claude Code (stdio transport):
 
 ```bash
 claude mcp add --transport stdio essdive-mcp --env ESSDIVE_API_TOKEN=YOUR_ESS_DIVE_TOKEN_HERE -- uv run python ./src/essdive_mcp/main.py
+```
+
+Token file alternative:
+
+```bash
+claude mcp add --transport stdio essdive-mcp -- uv run python ./src/essdive_mcp/main.py --token-file /path/to/token.txt
 ```
 
 # Tools

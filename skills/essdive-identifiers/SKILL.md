@@ -36,6 +36,7 @@ claude mcp add --transport stdio essdive-mcp -- uv run python ./src/essdive_mcp/
 
 - `doi-to-essdive-id`
 - `essdive-id-to-doi`
+- `coords-to-map-links`
 
 ## Usage examples
 
@@ -49,6 +50,12 @@ Convert an ESS-DIVE ID to a DOI:
 
 ```
 essdive-id-to-doi with essdive_id="ess-dive-9ea5fe57db73c90-20241024T093714082510"
+```
+
+Create map links for a point (geojson.io + Google Maps + Google Earth KML):
+
+```
+coords-to-map-links with points=[[38.9219, -106.9490]] and zoom=12
 ```
 
 ## Notes

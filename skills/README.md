@@ -22,6 +22,11 @@ Query the ESS-DeepDive fusion database for fields and file metadata.
 
 See `essdeepdive/SKILL.md` for full documentation.
 
+### Mapping helper
+
+All skills also include `coords-to-map-links` to turn points or bounding boxes into
+map links (geojson.io and OpenStreetMap).
+
 ## Use in Claude Code
 
 ```

@@ -31,6 +31,9 @@ MCP Tools Available:
   - get-ess-deepdive-file: Get comprehensive file-level information including field names,
     data types, summary statistics, and download metadata from ESS-DeepDive.
 
+**Mapping:**
+  - coords-to-map-links: Convert points or a bounding box to viewable map links (e.g., geojson.io).
+
 Authentication:
   API token can be provided via --token, --token-file, or ESSDIVE_API_TOKEN.
 """
@@ -45,6 +48,7 @@ from io import StringIO
 from typing import Dict, List, Optional, Any, Union
 import httpx
 from urllib.parse import quote
+from urllib.parse import quote as url_quote
 
 from fastmcp import FastMCP
 
@@ -73,6 +77,124 @@ def _norm_header_key(h: str) -> str:
     if not isinstance(h, str):
         h = str(h)
     return re.sub(r"[^a-z0-9]", "", h.lower())
+
+
+def _bbox_from_points(points: List[List[float]]) -> List[float]:
+    """Return [min_lat, min_lon, max_lat, max_lon] from a list of [lat, lon] points."""
+    lats = [p[0] for p in points]
+    lons = [p[1] for p in points]
+    return [min(lats), min(lons), max(lats), max(lons)]
+
+
+def _geojson_for_points(points: List[List[float]]) -> Dict[str, Any]:
+    """Build a GeoJSON FeatureCollection for points (input points are [lat, lon])."""
+    features = []
+    for lat, lon in points:
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [lon, lat]},
+                "properties": {},
+            }
+        )
+    return {"type": "FeatureCollection", "features": features}
+
+
+def _geojson_for_bbox(bbox: List[float]) -> Dict[str, Any]:
+    """Build a GeoJSON Polygon for bbox [min_lat, min_lon, max_lat, max_lon]."""
+    min_lat, min_lon, max_lat, max_lon = bbox
+    coordinates = [
+        [min_lon, min_lat],
+        [min_lon, max_lat],
+        [max_lon, max_lat],
+        [max_lon, min_lat],
+        [min_lon, min_lat],
+    ]
+    return {"type": "Polygon", "coordinates": [coordinates]}
+
+
+def _geojson_io_link(geojson_obj: Dict[str, Any]) -> str:
+    """Return a geojson.io link that loads the provided GeoJSON."""
+    encoded = url_quote(json.dumps(geojson_obj, separators=(",", ":")))
+    return f"https://geojson.io/#data=data:application/json,{encoded}"
+
+
+def _osm_bbox_link(bbox: List[float]) -> str:
+    """Return an OpenStreetMap link that frames the provided bbox."""
+    min_lat, min_lon, max_lat, max_lon = bbox
+    return (
+        "https://www.openstreetmap.org/"
+        f"?minlon={min_lon}&minlat={min_lat}&maxlon={max_lon}&maxlat={max_lat}"
+    )
+
+
+def _google_maps_center_link(
+    center: List[float], zoom: Optional[int] = None
+) -> str:
+    """Return a Google Maps link centered on a point."""
+    lat, lon = center
+    params = f"api=1&map_action=map&center={lat},{lon}"
+    if zoom is not None:
+        params += f"&zoom={zoom}"
+    return f"https://www.google.com/maps/@?{params}"
+
+
+def _kml_document(name: str, placemarks: List[str]) -> str:
+    """Return a KML document string with the provided placemarks."""
+    inner = "\n".join(placemarks)
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<kml xmlns="http://www.opengis.net/kml/2.2">\n'
+        "  <Document>\n"
+        f"    <name>{name}</name>\n"
+        f"{inner}\n"
+        "  </Document>\n"
+        "</kml>"
+    )
+
+
+def _kml_point_placemark(name: str, lat: float, lon: float) -> str:
+    """Return a KML placemark for a single point."""
+    return (
+        "    <Placemark>\n"
+        f"      <name>{name}</name>\n"
+        "      <Point>\n"
+        f"        <coordinates>{lon},{lat},0</coordinates>\n"
+        "      </Point>\n"
+        "    </Placemark>"
+    )
+
+
+def _kml_bbox_placemark(name: str, bbox: List[float]) -> str:
+    """Return a KML placemark for a bounding box polygon."""
+    min_lat, min_lon, max_lat, max_lon = bbox
+    coords = " ".join(
+        [
+            f"{min_lon},{min_lat},0",
+            f"{min_lon},{max_lat},0",
+            f"{max_lon},{max_lat},0",
+            f"{max_lon},{min_lat},0",
+            f"{min_lon},{min_lat},0",
+        ]
+    )
+    return (
+        "    <Placemark>\n"
+        f"      <name>{name}</name>\n"
+        "      <Polygon>\n"
+        "        <outerBoundaryIs>\n"
+        "          <LinearRing>\n"
+        f"            <coordinates>{coords}</coordinates>\n"
+        "          </LinearRing>\n"
+        "        </outerBoundaryIs>\n"
+        "      </Polygon>\n"
+        "    </Placemark>"
+    )
+
+
+def _kml_data_uri(kml: str) -> str:
+    """Return a data URI containing KML content."""
+    encoded = url_quote(kml)
+    return f"data:application/vnd.google-earth.kml+xml,{encoded}"
 
 
 def parse_flmd_file(content: str) -> Dict[str, str]:
@@ -829,6 +951,117 @@ def main():
                 {"error": f"Error retrieving dataset permissions: {str(e)}"},
                 indent=2,
             )
+
+    @server.tool(
+        name="coords-to-map-links",
+        description=(
+            "Convert points or a bounding box to map links (geojson.io, OpenStreetMap, "
+            "Google Maps, Google Earth KML)"
+        ),
+    )
+    def coords_to_map_links(
+        points: Optional[List[List[float]]] = None,
+        bbox: Optional[List[float]] = None,
+        zoom: Optional[int] = None,
+    ) -> str:
+        """
+        Convert coordinates to viewable map links.
+
+        Args:
+            points: List of [lat, lon] points (e.g., [[38.92, -106.95], [38.93, -106.94]])
+            bbox: [min_lat, min_lon, max_lat, max_lon]
+            zoom: Optional zoom level for geojson.io center view (if provided)
+
+        Examples:
+            coords-to-map-links with points=[[38.9219, -106.9490]]
+            coords-to-map-links with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
+
+        Returns:
+            JSON string with map links, derived geometry info, and KML data URIs
+        """
+        if not points and not bbox:
+            return json.dumps(
+                {"error": "Provide either points or bbox."}, indent=2
+            )
+
+        if points:
+            if any(len(p) != 2 for p in points):
+                return json.dumps(
+                    {"error": "Each point must be [lat, lon]."}, indent=2
+                )
+
+        derived_bbox = bbox
+        if not derived_bbox and points:
+            derived_bbox = _bbox_from_points(points)
+
+        if derived_bbox and len(derived_bbox) != 4:
+            return json.dumps(
+                {"error": "bbox must be [min_lat, min_lon, max_lat, max_lon]."},
+                indent=2,
+            )
+
+        features: List[Dict[str, Any]] = []
+        if points:
+            features.extend(_geojson_for_points(points)["features"])
+        if derived_bbox:
+            features.append(
+                {
+                    "type": "Feature",
+                    "geometry": _geojson_for_bbox(derived_bbox),
+                    "properties": {"type": "bbox"},
+                }
+            )
+
+        geojson_obj: Dict[str, Any]
+        if features:
+            geojson_obj = {"type": "FeatureCollection", "features": features}
+        else:
+            geojson_obj = _geojson_for_bbox(derived_bbox)
+
+        response: Dict[str, Any] = {
+            "geojson": geojson_obj,
+            "links": {
+                "geojson_io": _geojson_io_link(geojson_obj),
+            },
+        }
+
+        if derived_bbox:
+            response["bbox"] = derived_bbox
+            response["links"]["openstreetmap_bbox"] = _osm_bbox_link(
+                derived_bbox)
+            center_lat = (derived_bbox[0] + derived_bbox[2]) / 2
+            center_lon = (derived_bbox[1] + derived_bbox[3]) / 2
+            response["center"] = [center_lat, center_lon]
+            response["links"]["google_maps_center"] = _google_maps_center_link(
+                response["center"], zoom=zoom
+            )
+            if zoom is not None:
+                response["links"]["geojson_io_center"] = (
+                    f"https://geojson.io/#map={zoom}/{center_lat}/{center_lon}"
+                )
+
+            center_kml = _kml_document(
+                "Center",
+                [_kml_point_placemark("Center", center_lat, center_lon)],
+            )
+            response["links"]["google_earth_kml_center"] = _kml_data_uri(center_kml)
+
+        if derived_bbox:
+            bbox_kml = _kml_document(
+                "Bounding Box",
+                [_kml_bbox_placemark("Bounding Box", derived_bbox)],
+            )
+            response["links"]["google_earth_kml_bbox"] = _kml_data_uri(bbox_kml)
+
+        if points:
+            point_placemarks = [
+                _kml_point_placemark(f"Point {idx + 1}", lat, lon)
+                for idx, (lat, lon) in enumerate(points)
+            ]
+            points_kml = _kml_document("Points", point_placemarks)
+            response["links"]["google_earth_kml_points"] = _kml_data_uri(points_kml)
+
+        return json.dumps(response, indent=2)
 
     @server.tool(
         name="doi-to-essdive-id",

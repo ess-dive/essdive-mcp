@@ -955,7 +955,8 @@ def main():
 
         if derived_bbox:
             response["bbox"] = derived_bbox
-            response["links"]["openstreetmap_bbox"] = _osm_bbox_link(derived_bbox)
+            response["links"]["openstreetmap_bbox"] = _osm_bbox_link(
+                derived_bbox)
             center_lat = (derived_bbox[0] + derived_bbox[2]) / 2
             center_lon = (derived_bbox[1] + derived_bbox[3]) / 2
             response["center"] = [center_lat, center_lon]

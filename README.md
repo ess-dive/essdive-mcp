@@ -62,15 +62,86 @@ uv add .
 uv run python src/essdive_mcp/main.py --token YOUR_ESS_DIVE_TOKEN_HERE
 ```
 
-### Use the Server with an Agentic Framework
+### Install MCP in Claude Code
 
-You may run the server locally, then set it up in your own agentic AI framework to have it interface with the MCP.
+Claude Code can connect to local MCP servers over stdio. All options
+(`--transport`, `--env`, `--scope`, `--header`) must come before the server
+name, and `--` separates Claude's flags from the server command.
 
-With Claude Code, for example, navigate to the project directory, then run this command from the command line:
+Local scope (default, only for you in this project; stored in `~/.claude.json`
+under this project's path):
 
 ```
-claude mcp add --transport stdio essdive-mcp --env ESSDIVE_API_TOKEN=YOUR_ESS_DIVE_TOKEN_HERE -- uv run python ./src/essdive_mcp/main.py
+claude mcp add --transport stdio --env ESSDIVE_API_TOKEN=YOUR_ESS_DIVE_TOKEN_HERE essdive-mcp -- \
+  uv run python ./src/essdive_mcp/main.py
 ```
+
+Project scope (shared via `.mcp.json` in the repo). Claude Code will prompt
+for approval before using a project-scoped server. To reset approvals:
+
+```
+claude mcp reset-project-choices
+```
+
+```
+claude mcp add --transport stdio --scope project --env ESSDIVE_API_TOKEN=YOUR_ESS_DIVE_TOKEN_HERE essdive-mcp -- \
+  uv run python ./src/essdive_mcp/main.py
+```
+
+User scope (available across all projects):
+
+```
+claude mcp add --transport stdio --scope user --env ESSDIVE_API_TOKEN=YOUR_ESS_DIVE_TOKEN_HERE essdive-mcp -- \
+  uv run python ./src/essdive_mcp/main.py
+```
+
+Note: in older Claude Code versions, `local` scope was called `project`, and
+`user` scope was called `global`.
+
+Manage servers:
+
+```
+claude mcp list
+claude mcp get essdive-mcp
+claude mcp remove essdive-mcp
+```
+
+Within Claude Code, use `/mcp` to check server status.
+
+### Install MCP in Codex
+
+Codex uses the same MCP configuration for both the CLI and the IDE extension.
+You can add servers with the CLI or edit `~/.codex/config.toml` directly. You
+can also create a project-scoped config at `.codex/config.toml` (trusted
+projects only).
+
+Add the server with the CLI:
+
+```
+codex mcp add essdive-mcp --env ESSDIVE_API_TOKEN=YOUR_ESS_DIVE_TOKEN_HERE -- \
+  uv run python ./src/essdive_mcp/main.py
+```
+
+Or configure it in `~/.codex/config.toml`:
+
+```
+[mcp_servers.essdive-mcp]
+command = "uv"
+args = ["run", "python", "./src/essdive_mcp/main.py"]
+
+[mcp_servers.essdive-mcp.env]
+ESSDIVE_API_TOKEN = "YOUR_ESS_DIVE_TOKEN_HERE"
+```
+
+Manage servers:
+
+```
+codex mcp list
+codex mcp get essdive-mcp
+codex mcp remove essdive-mcp
+```
+
+In the Codex TUI, use `/mcp` to view active servers.
 
 ## Skills (Claude Code + Codex)
 

@@ -62,6 +62,15 @@ uv add .
 uv run python src/essdive_mcp/main.py --token YOUR_ESS_DIVE_TOKEN_HERE
 ```
 
+You can also provide the token via a file to avoid putting it in shell history:
+
+```bash
+uv run python src/essdive_mcp/main.py --token-file /path/to/token.txt
+```
+
+Note: the environment variable name is `ESSDIVE_API_TOKEN` (no underscore between
+ESS and DIVE).
+
 ### Install MCP in Claude Code
 
 Claude Code can connect to local MCP servers over stdio. All options
@@ -74,6 +83,13 @@ under this project's path):
 ```
 claude mcp add --transport stdio --env ESSDIVE_API_TOKEN=YOUR_ESS_DIVE_TOKEN_HERE essdive-mcp -- \
   uv run python ./src/essdive_mcp/main.py
+```
+
+Token file alternative (no environment variable):
+
+```
+claude mcp add --transport stdio essdive-mcp -- \
+  uv run python ./src/essdive_mcp/main.py --token-file /path/to/token.txt
 ```
 
 Project scope (shared via `.mcp.json` in the repo). Claude Code will prompt
@@ -131,6 +147,14 @@ args = ["run", "python", "./src/essdive_mcp/main.py"]
 
 [mcp_servers.essdive-mcp.env]
 ESSDIVE_API_TOKEN = "YOUR_ESS_DIVE_TOKEN_HERE"
+```
+
+Token file alternative (no environment variable):
+
+```
+[mcp_servers.essdive-mcp]
+command = "uv"
+args = ["run", "python", "./src/essdive_mcp/main.py", "--token-file", "/path/to/token.txt"]
 ```
 
 Manage servers:

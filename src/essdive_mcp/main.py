@@ -32,7 +32,7 @@ MCP Tools Available:
     data types, summary statistics, and download metadata from ESS-DeepDive.
 
 Authentication:
-  API token can be provided via --token flag or ESSDIVE_API_TOKEN environment variable.
+  API token can be provided via --token, --token-file, or ESSDIVE_API_TOKEN.
 """
 import asyncio
 import os
@@ -77,6 +77,10 @@ def _norm_header_key(h: str) -> str:
 
 def parse_flmd_file(content: str) -> Dict[str, str]:
     """Parse an FLMD (File Level Metadata) file and return a mapping of filename -> description.
+
+    Examples:
+        >>> parse_flmd_file("filename,file_description\\nfile1.csv,Soil moisture\\n")
+        {'file1.csv': 'Soil moisture'}
 
     Args:
         content: The FLMD file content as a string
@@ -165,6 +169,10 @@ class ESSDiveClient:
 
         Returns:
             API response containing search results
+
+        Examples:
+            await client.search_datasets(text="soil carbon", page_size=5, is_public=True)
+            await client.search_datasets(provider_name="NGEE Arctic", row_start=1, page_size=10)
         """
         params: Dict[str, Any] = {}
 
@@ -202,6 +210,10 @@ class ESSDiveClient:
 
         Returns:
             API response containing dataset details
+
+        Examples:
+            await client.get_dataset("ess-dive-9ea5fe57db73c90-20241024T093714082510")
+            await client.get_dataset("doi:10.15485/2453885")
         """
         # URL encode the identifier to handle special characters
         encoded_identifier = quote(identifier, safe="")
@@ -221,6 +233,9 @@ class ESSDiveClient:
 
         Returns:
             API response containing dataset status information
+
+        Examples:
+            await client.get_dataset_status("ess-dive-9ea5fe57db73c90-20241024T093714082510")
         """
         encoded_identifier = quote(identifier, safe="")
         url = f"{self.BASE_URL}/packages/{encoded_identifier}/status"
@@ -239,6 +254,9 @@ class ESSDiveClient:
 
         Returns:
             API response containing dataset permissions information
+
+        Examples:
+            await client.get_dataset_permissions("ess-dive-9ea5fe57db73c90-20241024T093714082510")
         """
         encoded_identifier = quote(identifier, safe="")
         url = f"{self.BASE_URL}/packages/{encoded_identifier}/share"
@@ -325,6 +343,12 @@ def _normalize_doi(identifier: str) -> str:
 
     Returns:
         Normalized DOI in the format doi:10.xxxx/...
+
+    Examples:
+        >>> _normalize_doi("10.15485/2453885")
+        'doi:10.15485/2453885'
+        >>> _normalize_doi("https://doi.org/10.15485/2453885")
+        'doi:10.15485/2453885'
     """
     identifier = identifier.strip()
 
@@ -352,6 +376,10 @@ def doi_to_essdive_id(doi: str, api_token: Optional[str] = None) -> str:
 
     Returns:
         The ESS-DIVE dataset ID
+
+    Examples:
+        >>> doi_to_essdive_id("10.15485/2453885", api_token="TOKEN")
+        'ess-dive-...'
 
     Raises:
         ValueError: If the DOI is not found or API call fails
@@ -390,6 +418,10 @@ def essdive_id_to_doi(essdive_id: str, api_token: Optional[str] = None) -> str:
 
     Returns:
         The DOI in the format doi:10.xxxx/...
+
+    Examples:
+        >>> essdive_id_to_doi("ess-dive-9ea5fe57db73c90-20241024T093714082510", api_token="TOKEN")
+        'doi:10.15485/2453885'
 
     Raises:
         ValueError: If the ESS-DIVE ID is not found or API call fails
@@ -449,6 +481,10 @@ def search_ess_deepdive(
 
     Returns:
         API response containing search results with field metadata
+
+    Examples:
+        >>> search_ess_deepdive(field_name="temperature", record_count_min=100)
+        {...}
     """
     params: Dict[str, Any] = {
         "rowStart": row_start,
@@ -487,6 +523,10 @@ def get_ess_deepdive_dataset(doi: str, file_path: str) -> Dict[str, Any]:
 
     Returns:
         API response containing detailed field information
+
+    Examples:
+        >>> get_ess_deepdive_dataset("10.15485/2453885", "dataset.zip/data.csv")
+        {...}
     """
     # Ensure DOI has the correct format
     if not doi.startswith("doi:"):
@@ -513,6 +553,10 @@ def get_ess_deepdive_file(doi: str, file_path: str) -> Dict[str, Any]:
 
     Returns:
         API response containing file information, fields, and download metadata
+
+    Examples:
+        >>> get_ess_deepdive_file("doi:10.15485/2453885", "dataset.zip/data.csv")
+        {...}
     """
     return get_ess_deepdive_dataset(doi, file_path)
 
@@ -602,6 +646,10 @@ def main():
             page_size: Number of results per page
             format: Format of the results (summary, detailed, raw)
 
+        Examples:
+            search-datasets with query="soil carbon" and page_size=10
+            search-datasets with creator="Smith" and provider_name="NGEE Arctic"
+
         Returns:
             Formatted search results
         """
@@ -655,6 +703,9 @@ def main():
 
         Args:
             id: ESS-DIVE dataset identifier
+
+        Examples:
+            get-dataset with id="ess-dive-9ea5fe57db73c90-20241024T093714082510"
 
         Returns:
             Formatted dataset information
@@ -736,6 +787,9 @@ def main():
         Args:
             content: The FLMD CSV file content as a string
 
+        Examples:
+            parse-flmd-file with content="filename,file_description\nfile1.csv,Soil moisture\n"
+
         Returns:
             JSON string mapping filenames to their descriptions
         """
@@ -760,6 +814,9 @@ def main():
 
         Args:
             id: ESS-DIVE dataset identifier
+
+        Examples:
+            get-dataset-permissions with id="ess-dive-9ea5fe57db73c90-20241024T093714082510"
 
         Returns:
             JSON string containing the dataset permissions
@@ -795,6 +852,10 @@ def main():
 
         Args:
             doi: A DOI in any common format
+
+        Examples:
+            doi-to-essdive-id with doi="10.15485/2453885"
+            doi-to-essdive-id with doi="https://doi.org/10.15485/2453885"
 
         Returns:
             JSON string containing the ESS-DIVE dataset ID
@@ -832,6 +893,9 @@ def main():
 
         Args:
             essdive_id: An ESS-DIVE dataset identifier
+
+        Examples:
+            essdive-id-to-doi with essdive_id="ess-dive-9ea5fe57db73c90-20241024T093714082510"
 
         Returns:
             JSON string containing the DOI
@@ -886,6 +950,10 @@ def main():
             row_start: The starting row for pagination (default: 1)
             page_size: Number of results per page (max: 100, default: 25)
             max_pages: Maximum number of pages to fetch (optional, for large result sets)
+
+        Examples:
+            search-ess-deepdive with field_name="temperature" and record_count_min=100
+            search-ess-deepdive with doi="10.15485/2453885" and field_definition="soil"
 
         Returns:
             JSON string containing search results with field metadata and pagination info.
@@ -988,6 +1056,9 @@ def main():
             doi: The DOI of the dataset (with or without 'doi:' prefix)
             file_path: The file path within the dataset
 
+        Examples:
+            get-ess-deepdive-dataset with doi="10.15485/2453885" and file_path="dataset.zip/data.csv"
+
         Returns:
             JSON string containing detailed field information
         """
@@ -1020,6 +1091,9 @@ def main():
         Args:
             doi: The DOI of the dataset (with or without 'doi:' prefix, format: doi:10.xxxx/...)
             file_path: The file path within the dataset (e.g., "dataset.zip/data.csv")
+
+        Examples:
+            get-ess-deepdive-file with doi="doi:10.15485/2453885" and file_path="dataset.zip/data.csv"
 
         Returns:
             JSON string containing file information with all field metadata and download URLs

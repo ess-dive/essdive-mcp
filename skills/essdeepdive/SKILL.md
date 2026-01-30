@@ -65,7 +65,7 @@ Get full file metadata and download info:
 get-ess-deepdive-file with doi="doi:10.15485/2453885" and file_path="dataset.zip/data.csv"
 ```
 
-Create a geojson.io link for a point:
+Create map links for a point (geojson.io + Google Maps + Google Earth KML):
 
 ```
 coords-to-map-links with points=[[38.9219, -106.9490]] and zoom=12

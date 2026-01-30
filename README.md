@@ -360,12 +360,16 @@ Retrieve detailed information about a specific file from ESS-DeepDive (Get-Datas
 
 #### coords-to-map-links
 
-Convert points or a bounding box into map links (GeoJSON via geojson.io and a bounding-box view in OpenStreetMap).
+Convert points or a bounding box into map links (geojson.io, OpenStreetMap, Google Maps,
+and Google Earth KML data URIs).
 
 **Parameters:**
 - `points` (optional): List of `[lat, lon]` points
 - `bbox` (optional): `[min_lat, min_lon, max_lat, max_lon]`
 - `zoom` (optional): Zoom level for a centered geojson.io view
+
+**Returns:** Links for geojson.io, OpenStreetMap, Google Maps (center point), and
+Google Earth KML data URIs for center/bbox/points.
 
 **Example:**
 ```

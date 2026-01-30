@@ -1,0 +1,40 @@
+{
+  "name": "essdive-mcp-skills",
+  "owner": {
+    "name": "J. Harry Caufield",
+    "email": "jhc@lbl.gov"
+  },
+  "metadata": {
+    "description": "Skills for ESS-DIVE dataset search, identifier conversion, and ESS-DeepDive queries",
+    "version": "0.2.2"
+  },
+  "plugins": [
+    {
+      "name": "essdive-datasets",
+      "description": "Search ESS-DIVE datasets and fetch metadata/permissions",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/essdive-datasets"
+      ]
+    },
+    {
+      "name": "essdive-identifiers",
+      "description": "Convert between ESS-DIVE IDs and DOIs",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/essdive-identifiers"
+      ]
+    },
+    {
+      "name": "essdeepdive",
+      "description": "Query the ESS-DeepDive fusion database",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "./skills/essdeepdive"
+      ]
+    }
+  ]
+}

@@ -29,3 +29,17 @@ See `essdeepdive/SKILL.md` for full documentation.
 ```
 
 This registers the skills as a plugin in Claude Code.
+
+## Use in Codex
+
+Run the helper script to symlink the skills into your Codex skills directory:
+
+```
+./scripts/install_codex_skills.sh
+```
+
+To remove the links:
+
+```
+./scripts/uninstall_codex_skills.sh
+```

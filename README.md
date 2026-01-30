@@ -96,6 +96,18 @@ ln -s "$(pwd)/skills/essdive-identifiers" ~/.codex/skills/essdive-identifiers
 ln -s "$(pwd)/skills/essdeepdive" ~/.codex/skills/essdeepdive
 ```
 
+Or use the helper script:
+
+```
+./scripts/install_codex_skills.sh
+```
+
+Remove the links later with:
+
+```
+./scripts/uninstall_codex_skills.sh
+```
+
 
 ### Command Line Options
 

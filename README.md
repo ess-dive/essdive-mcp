@@ -167,6 +167,30 @@ codex mcp remove essdive-mcp
 
 In the Codex TUI, use `/mcp` to view active servers.
 
+### Install MCP in Goose
+
+1. Open the Goose Extensions interface
+2. Click "Add Custom Extension"
+3. Fill in the following fields:
+   - **Extension Name**: `essdive-mcp`
+   - **Type**: `STDIO`
+   - **Description** (optional): `ESS-DIVE and ESS-DeepDive dataset search and retrieval`
+   - **Command**: `uv run python /path/to/essdive-mcp/src/essdive_mcp/main.py`
+   - **Timeout**: `300` (default)
+   - **Environment Variables**:
+     - Variable name: `ESSDIVE_API_TOKEN`
+     - Value: `YOUR_ESS_DIVE_TOKEN_HERE`
+     - Click the "+Add Extension" button to add
+
+4. Save the extension and restart Goose
+
+Replace `/path/to/essdive-mcp` with the actual path to this repository.
+
+**Token file alternative**: Instead of adding the `ESSDIVE_API_TOKEN` environment variable, you can modify the Command field to include the token file:
+```
+uv run python /path/to/essdive-mcp/src/essdive_mcp/main.py --token-file /path/to/token.txt
+```
+
 ## Skills (Claude Code + Codex)
 
 This repository includes skill definitions under `skills/` that can be used by

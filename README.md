@@ -50,8 +50,7 @@ This project implements a Model Context Protocol server that allows language mod
 3. Install using uv:
 
 ```bash
-uv init
-uv add .
+uv sync
 ```
 
 ## Usage

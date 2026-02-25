@@ -27,3 +27,8 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/essdive_mcp"]
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: tests that call external ESS-DIVE / ESS-DeepDive services",
+]

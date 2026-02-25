@@ -1,6 +1,7 @@
 """Integration tests that call live ESS-DIVE / ESS-DeepDive APIs."""
 
 import pytest
+import requests
 
 from essdive_mcp.main import (
     ESSDiveClient,
@@ -11,6 +12,26 @@ from essdive_mcp.main import (
 
 
 pytestmark = pytest.mark.integration
+
+
+def _download_prefix(url: str, bytes_to_read: int) -> tuple[int, str, bytes]:
+    """Download only a small prefix of a file for lightweight integration checks."""
+    if bytes_to_read <= 0:
+        raise ValueError("bytes_to_read must be positive")
+
+    headers = {"Range": f"bytes=0-{bytes_to_read - 1}"}
+    with requests.get(url, headers=headers, stream=True, timeout=30) as response:
+        response.raise_for_status()
+        content_type = response.headers.get("content-type", "")
+        data = bytearray()
+        for chunk in response.iter_content(chunk_size=min(1024, bytes_to_read)):
+            if not chunk:
+                continue
+            data.extend(chunk)
+            if len(data) >= bytes_to_read:
+                break
+
+        return response.status_code, content_type, bytes(data)
 
 
 @pytest.mark.asyncio
@@ -90,3 +111,50 @@ def test_get_ess_deepdive_file_live_from_search_result(
     assert file_response["doi"] == first["doi"]
     assert file_response["data_file"] == first["data_file"]
     assert isinstance(file_response.get("fields"), list)
+
+
+def test_essdeepdive_download_metadata_live(
+    essdeepdive_download_examples: list[dict[str, int | str]],
+):
+    """Download metadata should include a retrievable content URL."""
+    for example in essdeepdive_download_examples:
+        search_response = search_ess_deepdive(
+            field_name=str(example["field_name"]),
+            page_size=int(example["page_size"]),
+        )
+        first = search_response["results"][0]
+        file_response = get_ess_deepdive_file(first["doi"], first["data_file"])
+        download_info = file_response["data_download"]
+
+        assert isinstance(download_info, dict)
+        assert download_info.get("contentUrl", "").startswith("https://")
+        assert isinstance(download_info.get("name"),
+                          str) and download_info["name"]
+        assert download_info.get("contentSize") is not None
+
+
+def test_essdeepdive_file_download_partial_read_live(
+    essdeepdive_download_examples: list[dict[str, int | str]],
+):
+    """Download a small byte prefix from live ESS-DeepDive-linked files."""
+    for example in essdeepdive_download_examples:
+        search_response = search_ess_deepdive(
+            field_name=str(example["field_name"]),
+            page_size=int(example["page_size"]),
+        )
+        first = search_response["results"][0]
+        file_response = get_ess_deepdive_file(first["doi"], first["data_file"])
+        url = file_response["data_download"]["contentUrl"]
+        requested_bytes = int(example["bytes_to_read"])
+
+        status_code, content_type, blob = _download_prefix(
+            url, requested_bytes)
+
+        assert status_code in (200, 206)
+        assert len(blob) > 0
+        assert len(blob) <= requested_bytes + 1024
+
+        # Most sample files are CSV; if we get text content, verify it is readable.
+        if "text" in content_type or "csv" in content_type:
+            text_prefix = blob.decode("utf-8", errors="replace")
+            assert "," in text_prefix or "\t" in text_prefix

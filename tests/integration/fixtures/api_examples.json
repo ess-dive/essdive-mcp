@@ -25,6 +25,18 @@
         "field_name": "soil",
         "page_size": 3
       }
+    ],
+    "download_examples": [
+      {
+        "field_name": "temperature",
+        "page_size": 1,
+        "bytes_to_read": 1024
+      },
+      {
+        "field_name": "soil",
+        "page_size": 1,
+        "bytes_to_read": 768
+      }
     ]
   }
 }

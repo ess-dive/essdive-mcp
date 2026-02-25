@@ -586,6 +586,57 @@ class TestDoiConversion:
             result = essdive_id_to_doi("ess-dive-test-id-67890")
             assert result == "doi:10.1234/test2"
 
+    def test_essdive_id_to_doi_uses_dataset_at_id(self):
+        """Test ESS-DIVE ID to DOI conversion using dataset @id field."""
+        mock_response = {
+            "id": "ess-dive-test-id-at-id",
+            "dataset": {
+                "name": "Test Dataset",
+                "@id": "doi:10.1234/test3",
+            }
+        }
+
+        mock_response_obj = Mock()
+        mock_response_obj.json.return_value = mock_response
+        mock_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            result = essdive_id_to_doi("ess-dive-test-id-at-id")
+            assert result == "doi:10.1234/test3"
+
+    def test_essdive_id_to_doi_prefers_dataset_at_id_over_doi(self):
+        """Test @id is preferred when both @id and doi fields are present."""
+        mock_response = {
+            "id": "ess-dive-test-id-both",
+            "dataset": {
+                "name": "Test Dataset",
+                "@id": "doi:10.1234/preferred",
+                "doi": "10.1234/fallback",
+            }
+        }
+
+        mock_response_obj = Mock()
+        mock_response_obj.json.return_value = mock_response
+        mock_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            result = essdive_id_to_doi("ess-dive-test-id-both")
+            assert result == "doi:10.1234/preferred"
+
     def test_essdive_id_to_doi_missing_doi(self):
         """Test ESS-DIVE ID to DOI conversion when response has no DOI."""
         mock_response = {

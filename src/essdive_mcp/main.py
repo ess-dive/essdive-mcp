@@ -725,7 +725,8 @@ def essdive_id_to_doi(essdive_id: str, api_token: Optional[str] = None) -> str:
         try:
             result = loop.run_until_complete(client.get_dataset(essdive_id))
             dataset_meta = result.get("dataset", {})
-            doi = dataset_meta.get("doi")
+            # ESS-DIVE currently returns DOI in dataset["@id"]; keep "doi" as fallback.
+            doi = dataset_meta.get("@id") or dataset_meta.get("doi")
             if not doi:
                 raise ValueError(
                     f"No DOI found in metadata for ESS-DIVE ID: {essdive_id}")
@@ -995,10 +996,8 @@ def main():
                     keywords_list = keywords
 
             # If query is provided but no specific text search parameter,
-            # use the query as the text search
-            text = None
-            if query and not any([creator, provider_name, keywords_list]):
-                text = query
+            # use query as the text search string.
+            text = query if query else None
 
             # Search for datasets (always search public datasets)
             result = await client.search_datasets(

@@ -17,7 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-essdive-mcp = "main:main"
+essdive-mcp = "essdive_mcp.main:main"
 
 [dependency-groups]
 dev = [

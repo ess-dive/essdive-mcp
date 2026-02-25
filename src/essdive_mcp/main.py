@@ -43,6 +43,8 @@ import argparse
 import json
 import csv
 import re
+import logging
+import traceback
 import requests
 from io import StringIO
 from typing import Dict, List, Optional, Any, Union
@@ -51,6 +53,146 @@ from urllib.parse import quote
 from urllib.parse import quote as url_quote
 
 from fastmcp import FastMCP
+
+
+LOGGER = logging.getLogger("essdive_mcp")
+REQUEST_TIMEOUT_SECONDS = 30.0
+
+
+def _is_truthy(value: Optional[str]) -> bool:
+    """Return True when a string value represents an enabled boolean."""
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _configure_logging(verbose: bool) -> None:
+    """Configure logging for MCP runtime diagnostics."""
+    level = logging.DEBUG if verbose else logging.INFO
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+    LOGGER.setLevel(level)
+
+
+def _truncate_text(value: str, max_length: int = 500) -> str:
+    """Return text truncated to a bounded size with an indicator."""
+    if len(value) <= max_length:
+        return value
+    return f"{value[:max_length]}... [truncated]"
+
+
+def _iter_exception_chain(exc: BaseException):
+    """Yield an exception plus any causes/contexts."""
+    current: Optional[BaseException] = exc
+    seen_ids: set[int] = set()
+    while current and id(current) not in seen_ids:
+        seen_ids.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
+def _extract_http_error_details(exc: BaseException) -> Dict[str, Any]:
+    """Extract HTTP-centric diagnostics from common request libraries."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        response = exc.response
+        request_url = str(
+            response.request.url) if response.request else str(response.url)
+        details: Dict[str, Any] = {
+            "status_code": response.status_code,
+            "url": request_url,
+        }
+        body = response.text.strip()
+        if body:
+            details["response_body_preview"] = _truncate_text(body)
+        return details
+
+    if isinstance(exc, httpx.RequestError):
+        details = {"url": str(exc.request.url)} if exc.request else {}
+        if str(exc):
+            details["request_error"] = str(exc)
+        return details
+
+    if isinstance(exc, requests.HTTPError):
+        response = exc.response
+        if response is None:
+            return {}
+        details = {
+            "status_code": response.status_code,
+            "url": response.url,
+        }
+        body = response.text.strip()
+        if body:
+            details["response_body_preview"] = _truncate_text(body)
+        return details
+
+    if isinstance(exc, requests.RequestException):
+        details: Dict[str, Any] = {}
+        request = getattr(exc, "request", None)
+        if request and getattr(request, "url", None):
+            details["url"] = request.url
+        if str(exc):
+            details["request_error"] = str(exc)
+        return details
+
+    return {}
+
+
+def _build_tool_error_payload(
+    operation: str,
+    exc: BaseException,
+    verbose: bool = False,
+    context: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Build a standard MCP tool error payload with optional diagnostics."""
+    payload: Dict[str, Any] = {
+        "error": {
+            "operation": operation,
+            "type": exc.__class__.__name__,
+            "message": str(exc) or repr(exc),
+        }
+    }
+
+    if context:
+        payload["error"]["context"] = context
+
+    for candidate in _iter_exception_chain(exc):
+        http_details = _extract_http_error_details(candidate)
+        if http_details:
+            payload["error"]["http"] = http_details
+            break
+
+    if verbose:
+        payload["error"]["traceback"] = traceback.format_exc()
+    else:
+        payload["error"]["hint"] = (
+            "Run the MCP server with --verbose or set ESSDIVE_MCP_VERBOSE=1 for a traceback."
+        )
+
+    return payload
+
+
+def _tool_error_response(
+    operation: str,
+    exc: BaseException,
+    verbose: bool = False,
+    context: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Log and serialize a standard tool error response as JSON."""
+    payload = _build_tool_error_payload(
+        operation, exc, verbose=verbose, context=context)
+    if verbose:
+        LOGGER.exception("Tool %s failed", operation)
+    else:
+        LOGGER.error("Tool %s failed: %s", operation,
+                     payload["error"]["message"])
+    return json.dumps(payload, indent=2)
+
+
+def _context_without_none(context: Dict[str, Any]) -> Dict[str, Any]:
+    """Drop unset keys before emitting tool context."""
+    return {key: value for key, value in context.items() if value is not None}
 
 
 # Helper functions for FLMD parsing
@@ -210,6 +352,9 @@ def parse_flmd_file(content: str) -> Dict[str, str]:
     Returns:
         Dictionary mapping filename to file description
     """
+    if not isinstance(content, str):
+        raise ValueError("Invalid FLMD CSV content: content must be a string")
+
     file_descriptions = {}
     try:
         reader = csv.DictReader(StringIO(content))
@@ -232,14 +377,14 @@ def parse_flmd_file(content: str) -> Dict[str, str]:
 
         # Parse the rows
         for row in reader:
-            filename = row.get(filename_col, "").strip()
-            description = row.get(description_col, "").strip()
+            filename = sanitize_tsv_field(row.get(filename_col, ""))
+            description = sanitize_tsv_field(row.get(description_col, ""))
 
             if filename and description:
-                file_descriptions[filename] = sanitize_tsv_field(description)
+                file_descriptions[filename] = description
 
-    except Exception as e:
-        pass
+    except Exception as exc:
+        raise ValueError(f"Invalid FLMD CSV content: {exc}") from exc
 
     return file_descriptions
 
@@ -317,11 +462,19 @@ class ESSDiveClient:
             params["keywords"] = keywords
 
         url = f"{self.BASE_URL}/packages"
+        LOGGER.debug("ESS-DIVE search request url=%s params=%s", url, params)
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
             response = await client.get(url, params=params, headers=self._get_headers())
             response.raise_for_status()
-            return response.json()
+            result = response.json()
+            LOGGER.debug(
+                "ESS-DIVE search response total=%s count=%s",
+                result.get("total"),
+                len(result.get("result", [])) if isinstance(
+                    result, dict) else "n/a",
+            )
+            return result
 
     async def get_dataset(self, identifier: str) -> Dict[str, Any]:
         """
@@ -340,11 +493,15 @@ class ESSDiveClient:
         # URL encode the identifier to handle special characters
         encoded_identifier = quote(identifier, safe="")
         url = f"{self.BASE_URL}/packages/{encoded_identifier}"
+        LOGGER.debug("ESS-DIVE get dataset request url=%s", url)
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
             response = await client.get(url, headers=self._get_headers())
             response.raise_for_status()
-            return response.json()
+            result = response.json()
+            LOGGER.debug("ESS-DIVE get dataset response id=%s",
+                         result.get("id"))
+            return result
 
     async def get_dataset_status(self, identifier: str) -> Dict[str, Any]:
         """
@@ -361,11 +518,15 @@ class ESSDiveClient:
         """
         encoded_identifier = quote(identifier, safe="")
         url = f"{self.BASE_URL}/packages/{encoded_identifier}/status"
+        LOGGER.debug("ESS-DIVE get dataset status request url=%s", url)
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
             response = await client.get(url, headers=self._get_headers())
             response.raise_for_status()
-            return response.json()
+            result = response.json()
+            LOGGER.debug(
+                "ESS-DIVE get dataset status response keys=%s", list(result.keys()))
+            return result
 
     async def get_dataset_permissions(self, identifier: str) -> Dict[str, Any]:
         """
@@ -382,11 +543,15 @@ class ESSDiveClient:
         """
         encoded_identifier = quote(identifier, safe="")
         url = f"{self.BASE_URL}/packages/{encoded_identifier}/share"
+        LOGGER.debug("ESS-DIVE get dataset permissions request url=%s", url)
 
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
             response = await client.get(url, headers=self._get_headers())
             response.raise_for_status()
-            return response.json()
+            result = response.json()
+            LOGGER.debug(
+                "ESS-DIVE get dataset permissions response keys=%s", list(result.keys()))
+            return result
 
     def format_results(
         self, results: Dict[str, Any], format_type: str = "summary"
@@ -508,6 +673,8 @@ def doi_to_essdive_id(doi: str, api_token: Optional[str] = None) -> str:
     """
     # Normalize the DOI
     normalized_doi = _normalize_doi(doi)
+    LOGGER.debug(
+        "Converting DOI to ESS-DIVE ID doi=%s normalized=%s", doi, normalized_doi)
 
     # Create client and fetch dataset metadata
     client = ESSDiveClient(api_token=api_token)
@@ -528,7 +695,7 @@ def doi_to_essdive_id(doi: str, api_token: Optional[str] = None) -> str:
             loop.close()
     except Exception as e:
         raise ValueError(
-            f"Failed to convert DOI {doi} to ESS-DIVE ID: {str(e)}")
+            f"Failed to convert DOI {doi} to ESS-DIVE ID: {str(e)}") from e
 
 
 def essdive_id_to_doi(essdive_id: str, api_token: Optional[str] = None) -> str:
@@ -549,6 +716,7 @@ def essdive_id_to_doi(essdive_id: str, api_token: Optional[str] = None) -> str:
         ValueError: If the ESS-DIVE ID is not found or API call fails
     """
     client = ESSDiveClient(api_token=api_token)
+    LOGGER.debug("Converting ESS-DIVE ID to DOI essdive_id=%s", essdive_id)
 
     try:
         # Use asyncio to run the async function
@@ -567,7 +735,7 @@ def essdive_id_to_doi(essdive_id: str, api_token: Optional[str] = None) -> str:
             loop.close()
     except Exception as e:
         raise ValueError(
-            f"Failed to convert ESS-DIVE ID {essdive_id} to DOI: {str(e)}")
+            f"Failed to convert ESS-DIVE ID {essdive_id} to DOI: {str(e)}") from e
 
 
 # ESS-DeepDive API functions
@@ -630,9 +798,21 @@ def search_ess_deepdive(
     if doi:
         params["doi"] = doi[:100]  # Enforce max 100 DOIs
 
-    response = requests.get(ESS_DEEPDIVE_BASE_URL, params=params)
+    LOGGER.debug("ESS-DeepDive search request url=%s params=%s",
+                 ESS_DEEPDIVE_BASE_URL, params)
+    response = requests.get(
+        ESS_DEEPDIVE_BASE_URL,
+        params=params,
+        timeout=REQUEST_TIMEOUT_SECONDS,
+    )
     response.raise_for_status()
-    return response.json()
+    result = response.json()
+    LOGGER.debug(
+        "ESS-DeepDive search response pageCount=%s count=%s",
+        result.get("pageCount"),
+        len(result.get("results", [])) if isinstance(result, dict) else "n/a",
+    )
+    return result
 
 
 def get_ess_deepdive_dataset(doi: str, file_path: str) -> Dict[str, Any]:
@@ -656,10 +836,17 @@ def get_ess_deepdive_dataset(doi: str, file_path: str) -> Dict[str, Any]:
 
     # Construct the URL with the doi:file_path format
     url = f"{ESS_DEEPDIVE_BASE_URL}/{doi}:{file_path}"
+    LOGGER.debug("ESS-DeepDive dataset request url=%s", url)
 
-    response = requests.get(url)
+    response = requests.get(url, timeout=REQUEST_TIMEOUT_SECONDS)
     response.raise_for_status()
-    return response.json()
+    result = response.json()
+    LOGGER.debug(
+        "ESS-DeepDive dataset response doi=%s fields=%s",
+        result.get("doi") if isinstance(result, dict) else "n/a",
+        len(result.get("fields", [])) if isinstance(result, dict) else "n/a",
+    )
+    return result
 
 
 def get_ess_deepdive_file(doi: str, file_path: str) -> Dict[str, Any]:
@@ -732,10 +919,24 @@ def main():
         "--token-file",
         help="Path to a file containing the ESS-DIVE API token",
     )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Enable verbose logging and include tracebacks in tool error responses",
+    )
     args = parser.parse_args()
 
+    verbose_mode = args.verbose or _is_truthy(os.getenv("ESSDIVE_MCP_VERBOSE"))
+    _configure_logging(verbose_mode)
+
     # Get and validate API token
-    api_token = get_api_key(args.token, token_file=args.token_file)
+    try:
+        api_token = get_api_key(args.token, token_file=args.token_file)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    LOGGER.info("Starting ESS-DIVE MCP server (verbose=%s)", verbose_mode)
 
     # Create a FastMCP server
     server = FastMCP("essdive_mcp")
@@ -775,6 +976,15 @@ def main():
         Returns:
             Formatted search results
         """
+        LOGGER.debug(
+            "Tool search-datasets called query=%r creator=%r provider_name=%r row_start=%s page_size=%s format=%s",
+            query,
+            creator,
+            provider_name,
+            row_start,
+            page_size,
+            format,
+        )
         try:
             # Convert keywords to list if it's a string
             keywords_list = None
@@ -812,8 +1022,23 @@ def main():
             else:
                 return str(formatted)
 
-        except Exception as e:
-            return f"Error searching for datasets: {str(e)}"
+        except Exception as exc:
+            return _tool_error_response(
+                "search-datasets",
+                exc,
+                verbose=verbose_mode,
+                context=_context_without_none(
+                    {
+                        "query": query,
+                        "creator": creator,
+                        "provider_name": provider_name,
+                        "date_published": date_published,
+                        "row_start": row_start,
+                        "page_size": page_size,
+                        "format": format,
+                    }
+                ),
+            )
 
     @server.tool(
         name="get-dataset",
@@ -832,6 +1057,7 @@ def main():
         Returns:
             Formatted dataset information
         """
+        LOGGER.debug("Tool get-dataset called id=%s", id)
         try:
             result = await client.get_dataset(id)
 
@@ -891,8 +1117,13 @@ def main():
 
             return content
 
-        except Exception as e:
-            return f"Error retrieving dataset information: {str(e)}"
+        except Exception as exc:
+            return _tool_error_response(
+                "get-dataset",
+                exc,
+                verbose=verbose_mode,
+                context={"id": id},
+            )
 
     @server.tool(
         name="parse-flmd-file",
@@ -915,12 +1146,18 @@ def main():
         Returns:
             JSON string mapping filenames to their descriptions
         """
+        content_length = len(content) if isinstance(content, str) else None
+        LOGGER.debug(
+            "Tool parse-flmd-file called content_length=%s", content_length)
         try:
             file_descriptions = parse_flmd_file(content)
             return json.dumps(file_descriptions, indent=2)
-        except Exception as e:
-            return json.dumps(
-                {"error": f"Error parsing FLMD file: {str(e)}"}, indent=2
+        except Exception as exc:
+            return _tool_error_response(
+                "parse-flmd-file",
+                exc,
+                verbose=verbose_mode,
+                context={"content_length": content_length},
             )
 
     @server.tool(
@@ -943,13 +1180,16 @@ def main():
         Returns:
             JSON string containing the dataset permissions
         """
+        LOGGER.debug("Tool get-dataset-permissions called id=%s", id)
         try:
             result = await client.get_dataset_permissions(id)
             return json.dumps(result, indent=2)
-        except Exception as e:
-            return json.dumps(
-                {"error": f"Error retrieving dataset permissions: {str(e)}"},
-                indent=2,
+        except Exception as exc:
+            return _tool_error_response(
+                "get-dataset-permissions",
+                exc,
+                verbose=verbose_mode,
+                context={"id": id},
             )
 
     @server.tool(
@@ -979,89 +1219,105 @@ def main():
         Returns:
             JSON string with map links, derived geometry info, and KML data URIs
         """
-        if not points and not bbox:
-            return json.dumps(
-                {"error": "Provide either points or bbox."}, indent=2
-            )
+        points_count = len(points) if isinstance(points, list) else None
+        LOGGER.debug(
+            "Tool coords-to-map-links called points_count=%s bbox=%s zoom=%s",
+            points_count,
+            bbox,
+            zoom,
+        )
+        try:
+            if not points and not bbox:
+                raise ValueError("Provide either points or bbox.")
 
-        if points:
-            if any(len(p) != 2 for p in points):
-                return json.dumps(
-                    {"error": "Each point must be [lat, lon]."}, indent=2
+            if points and any(len(p) != 2 for p in points):
+                raise ValueError("Each point must be [lat, lon].")
+
+            derived_bbox = bbox
+            if not derived_bbox and points:
+                derived_bbox = _bbox_from_points(points)
+
+            if derived_bbox and len(derived_bbox) != 4:
+                raise ValueError(
+                    "bbox must be [min_lat, min_lon, max_lat, max_lon].")
+
+            features: List[Dict[str, Any]] = []
+            if points:
+                features.extend(_geojson_for_points(points)["features"])
+            if derived_bbox:
+                features.append(
+                    {
+                        "type": "Feature",
+                        "geometry": _geojson_for_bbox(derived_bbox),
+                        "properties": {"type": "bbox"},
+                    }
                 )
 
-        derived_bbox = bbox
-        if not derived_bbox and points:
-            derived_bbox = _bbox_from_points(points)
+            geojson_obj: Dict[str, Any]
+            if features:
+                geojson_obj = {"type": "FeatureCollection",
+                               "features": features}
+            else:
+                geojson_obj = _geojson_for_bbox(derived_bbox)
 
-        if derived_bbox and len(derived_bbox) != 4:
-            return json.dumps(
-                {"error": "bbox must be [min_lat, min_lon, max_lat, max_lon]."},
-                indent=2,
-            )
+            response: Dict[str, Any] = {
+                "geojson": geojson_obj,
+                "links": {
+                    "geojson_io": _geojson_io_link(geojson_obj),
+                },
+            }
 
-        features: List[Dict[str, Any]] = []
-        if points:
-            features.extend(_geojson_for_points(points)["features"])
-        if derived_bbox:
-            features.append(
-                {
-                    "type": "Feature",
-                    "geometry": _geojson_for_bbox(derived_bbox),
-                    "properties": {"type": "bbox"},
-                }
-            )
-
-        geojson_obj: Dict[str, Any]
-        if features:
-            geojson_obj = {"type": "FeatureCollection", "features": features}
-        else:
-            geojson_obj = _geojson_for_bbox(derived_bbox)
-
-        response: Dict[str, Any] = {
-            "geojson": geojson_obj,
-            "links": {
-                "geojson_io": _geojson_io_link(geojson_obj),
-            },
-        }
-
-        if derived_bbox:
-            response["bbox"] = derived_bbox
-            response["links"]["openstreetmap_bbox"] = _osm_bbox_link(
-                derived_bbox)
-            center_lat = (derived_bbox[0] + derived_bbox[2]) / 2
-            center_lon = (derived_bbox[1] + derived_bbox[3]) / 2
-            response["center"] = [center_lat, center_lon]
-            response["links"]["google_maps_center"] = _google_maps_center_link(
-                response["center"], zoom=zoom
-            )
-            if zoom is not None:
-                response["links"]["geojson_io_center"] = (
-                    f"https://geojson.io/#map={zoom}/{center_lat}/{center_lon}"
+            if derived_bbox:
+                response["bbox"] = derived_bbox
+                response["links"]["openstreetmap_bbox"] = _osm_bbox_link(
+                    derived_bbox)
+                center_lat = (derived_bbox[0] + derived_bbox[2]) / 2
+                center_lon = (derived_bbox[1] + derived_bbox[3]) / 2
+                response["center"] = [center_lat, center_lon]
+                response["links"]["google_maps_center"] = _google_maps_center_link(
+                    response["center"], zoom=zoom
                 )
+                if zoom is not None:
+                    response["links"]["geojson_io_center"] = (
+                        f"https://geojson.io/#map={zoom}/{center_lat}/{center_lon}"
+                    )
 
-            center_kml = _kml_document(
-                "Center",
-                [_kml_point_placemark("Center", center_lat, center_lon)],
+                center_kml = _kml_document(
+                    "Center",
+                    [_kml_point_placemark("Center", center_lat, center_lon)],
+                )
+                response["links"]["google_earth_kml_center"] = _kml_data_uri(
+                    center_kml)
+
+            if derived_bbox:
+                bbox_kml = _kml_document(
+                    "Bounding Box",
+                    [_kml_bbox_placemark("Bounding Box", derived_bbox)],
+                )
+                response["links"]["google_earth_kml_bbox"] = _kml_data_uri(
+                    bbox_kml)
+
+            if points:
+                point_placemarks = [
+                    _kml_point_placemark(f"Point {idx + 1}", lat, lon)
+                    for idx, (lat, lon) in enumerate(points)
+                ]
+                points_kml = _kml_document("Points", point_placemarks)
+                response["links"]["google_earth_kml_points"] = _kml_data_uri(
+                    points_kml)
+
+            return json.dumps(response, indent=2)
+        except Exception as exc:
+            return _tool_error_response(
+                "coords-to-map-links",
+                exc,
+                verbose=verbose_mode,
+                context={
+                    "points_count": points_count,
+                    "bbox_provided": bbox is not None,
+                    "zoom": zoom,
+                },
             )
-            response["links"]["google_earth_kml_center"] = _kml_data_uri(center_kml)
-
-        if derived_bbox:
-            bbox_kml = _kml_document(
-                "Bounding Box",
-                [_kml_bbox_placemark("Bounding Box", derived_bbox)],
-            )
-            response["links"]["google_earth_kml_bbox"] = _kml_data_uri(bbox_kml)
-
-        if points:
-            point_placemarks = [
-                _kml_point_placemark(f"Point {idx + 1}", lat, lon)
-                for idx, (lat, lon) in enumerate(points)
-            ]
-            points_kml = _kml_document("Points", point_placemarks)
-            response["links"]["google_earth_kml_points"] = _kml_data_uri(points_kml)
-
-        return json.dumps(response, indent=2)
 
     @server.tool(
         name="doi-to-essdive-id",
@@ -1093,6 +1349,7 @@ def main():
         Returns:
             JSON string containing the ESS-DIVE dataset ID
         """
+        LOGGER.debug("Tool doi-to-essdive-id called doi=%s", doi)
         try:
             essdive_id = doi_to_essdive_id(doi, api_token=api_token)
             return json.dumps(
@@ -1102,10 +1359,12 @@ def main():
                 },
                 indent=2,
             )
-        except Exception as e:
-            return json.dumps(
-                {"error": f"Error converting DOI to ESS-DIVE ID: {str(e)}"},
-                indent=2,
+        except Exception as exc:
+            return _tool_error_response(
+                "doi-to-essdive-id",
+                exc,
+                verbose=verbose_mode,
+                context={"doi": doi},
             )
 
     @server.tool(
@@ -1133,6 +1392,7 @@ def main():
         Returns:
             JSON string containing the DOI
         """
+        LOGGER.debug("Tool essdive-id-to-doi called essdive_id=%s", essdive_id)
         try:
             doi = essdive_id_to_doi(essdive_id, api_token=api_token)
             return json.dumps(
@@ -1142,10 +1402,12 @@ def main():
                 },
                 indent=2,
             )
-        except Exception as e:
-            return json.dumps(
-                {"error": f"Error converting ESS-DIVE ID to DOI: {str(e)}"},
-                indent=2,
+        except Exception as exc:
+            return _tool_error_response(
+                "essdive-id-to-doi",
+                exc,
+                verbose=verbose_mode,
+                context={"essdive_id": essdive_id},
             )
 
     @server.tool(
@@ -1192,6 +1454,14 @@ def main():
             JSON string containing search results with field metadata and pagination info.
             If results span multiple pages and max_pages is set, collects results across pages.
         """
+        LOGGER.debug(
+            "Tool search-ess-deepdive called field_name=%r doi=%r row_start=%s page_size=%s max_pages=%s",
+            field_name,
+            doi,
+            row_start,
+            page_size,
+            max_pages,
+        )
         try:
             # Parse DOI string if provided
             doi_list = None
@@ -1205,6 +1475,11 @@ def main():
                 pages_fetched = 0
 
                 while pages_fetched < max_pages:
+                    LOGGER.debug(
+                        "search-ess-deepdive pagination loop page_index=%s current_row=%s",
+                        pages_fetched + 1,
+                        current_row,
+                    )
                     result = search_ess_deepdive(
                         field_name=field_name,
                         field_definition=field_definition,
@@ -1268,10 +1543,26 @@ def main():
                     }
 
                 return json.dumps(result, indent=2)
-        except Exception as e:
-            return json.dumps(
-                {"error": f"Error searching ESS-DeepDive: {str(e)}"},
-                indent=2,
+        except Exception as exc:
+            return _tool_error_response(
+                "search-ess-deepdive",
+                exc,
+                verbose=verbose_mode,
+                context=_context_without_none(
+                    {
+                        "field_name": field_name,
+                        "field_definition": field_definition,
+                        "field_value_text": field_value_text,
+                        "field_value_numeric": field_value_numeric,
+                        "field_value_date": field_value_date,
+                        "record_count_min": record_count_min,
+                        "record_count_max": record_count_max,
+                        "doi": doi,
+                        "row_start": row_start,
+                        "page_size": page_size,
+                        "max_pages": max_pages,
+                    }
+                ),
             )
 
     @server.tool(
@@ -1295,13 +1586,20 @@ def main():
         Returns:
             JSON string containing detailed field information
         """
+        LOGGER.debug(
+            "Tool get-ess-deepdive-dataset called doi=%s file_path=%s",
+            doi,
+            file_path,
+        )
         try:
             result = get_ess_deepdive_dataset(doi=doi, file_path=file_path)
             return json.dumps(result, indent=2)
-        except Exception as e:
-            return json.dumps(
-                {"error": f"Error retrieving ESS-DeepDive dataset: {str(e)}"},
-                indent=2,
+        except Exception as exc:
+            return _tool_error_response(
+                "get-ess-deepdive-dataset",
+                exc,
+                verbose=verbose_mode,
+                context={"doi": doi, "file_path": file_path},
             )
 
     @server.tool(
@@ -1331,6 +1629,11 @@ def main():
         Returns:
             JSON string containing file information with all field metadata and download URLs
         """
+        LOGGER.debug(
+            "Tool get-ess-deepdive-file called doi=%s file_path=%s",
+            doi,
+            file_path,
+        )
         try:
             result = get_ess_deepdive_file(doi=doi, file_path=file_path)
 
@@ -1368,10 +1671,12 @@ def main():
                 )
 
             return json.dumps(result, indent=2)
-        except Exception as e:
-            return json.dumps(
-                {"error": f"Error retrieving ESS-DeepDive file: {str(e)}"},
-                indent=2,
+        except Exception as exc:
+            return _tool_error_response(
+                "get-ess-deepdive-file",
+                exc,
+                verbose=verbose_mode,
+                context={"doi": doi, "file_path": file_path},
             )
 
     # Run the server

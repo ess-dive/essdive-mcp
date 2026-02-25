@@ -871,6 +871,34 @@ def get_ess_deepdive_file(doi: str, file_path: str) -> Dict[str, Any]:
     return get_ess_deepdive_dataset(doi, file_path)
 
 
+def _summarize_essdeepdive_file_response(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Build a normalized summary view for ESS-DeepDive file responses."""
+    summary = {
+        "doi": result.get("doi"),
+        # Current API uses data_file; keep legacy key fallback.
+        "file_name": result.get("data_file") or result.get("file_name"),
+        # Current API commonly returns data_file; keep explicit file_path fallback.
+        "file_path": result.get("file_path") or result.get("data_file"),
+    }
+
+    fields = result.get("fields")
+    if isinstance(fields, list):
+        summary["total_fields"] = len(fields)
+        summary["field_names"] = [f.get("fieldName") for f in fields]
+
+    download = result.get("data_download")
+    if isinstance(download, dict):
+        summary["download_info"] = {
+            "content_size_bytes": download.get("contentSize"),
+            "encoding_format": download.get("encodingFormat")
+            or download.get("encoding_format"),
+            "content_url": download.get("contentUrl")
+            or download.get("contentURL"),
+        }
+
+    return summary
+
+
 def get_api_key(
     api_key: Optional[str] = None, token_file: Optional[str] = None
 ) -> str:
@@ -1638,27 +1666,7 @@ def main():
 
             # Extract relevant information for user-friendly display
             if isinstance(result, dict):
-                # Create a summary if we have file information
-                summary = {
-                    "doi": result.get("doi"),
-                    "file_name": result.get("file_name"),
-                    "file_path": result.get("file_path"),
-                }
-
-                # Include fields information if available
-                if "fields" in result:
-                    summary["total_fields"] = len(result["fields"])
-                    summary["field_names"] = [
-                        f.get("fieldName") for f in result["fields"]]
-
-                # Include download information if available
-                if "data_download" in result:
-                    download = result["data_download"]
-                    summary["download_info"] = {
-                        "content_size_bytes": download.get("contentSize"),
-                        "encoding_format": download.get("encoding_format"),
-                        "content_url": download.get("contentURL"),
-                    }
+                summary = _summarize_essdeepdive_file_response(result)
 
                 # Return complete result with helpful summary
                 return json.dumps(

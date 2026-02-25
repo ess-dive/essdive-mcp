@@ -14,6 +14,7 @@ from essdive_mcp.main import (
     search_ess_deepdive,
     get_ess_deepdive_dataset,
     get_ess_deepdive_file,
+    _summarize_essdeepdive_file_response,
 )
 import pytest
 import os
@@ -1027,6 +1028,53 @@ class TestGetEssDeepDiveFile:
             assert result1 == result2
             # Should have been called twice (once for each function)
             assert mock_get.call_count == 2
+
+
+class TestEssDeepDiveFileSummary:
+    """Tests for normalization of ESS-DeepDive file summary fields."""
+
+    def test_summary_uses_current_api_keys(self):
+        """Summary should map current ESS-DeepDive response keys correctly."""
+        response = {
+            "doi": "doi:10.1234/test",
+            "data_file": "dataset.csv",
+            "fields": [{"fieldName": "temperature"}],
+            "data_download": {
+                "contentSize": 1000,
+                "encodingFormat": "text/csv",
+                "contentUrl": "https://example.org/dataset.csv",
+            },
+        }
+
+        summary = _summarize_essdeepdive_file_response(response)
+
+        assert summary["doi"] == "doi:10.1234/test"
+        assert summary["file_name"] == "dataset.csv"
+        assert summary["file_path"] == "dataset.csv"
+        assert summary["total_fields"] == 1
+        assert summary["field_names"] == ["temperature"]
+        assert summary["download_info"]["encoding_format"] == "text/csv"
+        assert summary["download_info"]["content_url"] == "https://example.org/dataset.csv"
+
+    def test_summary_supports_legacy_fallback_keys(self):
+        """Summary should still support legacy key names."""
+        response = {
+            "doi": "doi:10.1234/test",
+            "file_name": "legacy.csv",
+            "file_path": "legacy/path.csv",
+            "data_download": {
+                "contentSize": 1000,
+                "encoding_format": "text/csv",
+                "contentURL": "https://example.org/legacy.csv",
+            },
+        }
+
+        summary = _summarize_essdeepdive_file_response(response)
+
+        assert summary["file_name"] == "legacy.csv"
+        assert summary["file_path"] == "legacy/path.csv"
+        assert summary["download_info"]["encoding_format"] == "text/csv"
+        assert summary["download_info"]["content_url"] == "https://example.org/legacy.csv"
 
 
 def test_reality():

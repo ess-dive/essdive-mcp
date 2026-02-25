@@ -6,6 +6,8 @@ from essdive_mcp.main import (
     parse_flmd_file,
     sanitize_tsv_field,
     _norm_header_key,
+    _is_truthy,
+    _build_tool_error_payload,
     _normalize_doi,
     doi_to_essdive_id,
     essdive_id_to_doi,
@@ -14,12 +16,9 @@ from essdive_mcp.main import (
     get_ess_deepdive_file,
 )
 import pytest
-import sys
 import os
+import requests
 from unittest.mock import Mock, patch, AsyncMock
-
-# Add the src directory to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 
 class TestGetApiKey:
@@ -47,6 +46,59 @@ class TestGetApiKey:
         with patch.dict(os.environ, {}, clear=True):
             with pytest.raises(ValueError, match="ESS-DIVE API key is required"):
                 get_api_key(None)
+
+
+class TestBooleanHelpers:
+    """Tests for truthy helper parsing."""
+
+    def test_is_truthy_true_values(self):
+        """Truthy values are accepted case-insensitively."""
+        assert _is_truthy("1")
+        assert _is_truthy("true")
+        assert _is_truthy("YES")
+        assert _is_truthy(" On ")
+
+    def test_is_truthy_false_values(self):
+        """Falsy/empty values are rejected."""
+        assert not _is_truthy("0")
+        assert not _is_truthy("false")
+        assert not _is_truthy("")
+        assert not _is_truthy(None)
+
+
+class TestToolErrorPayload:
+    """Tests for standard MCP error payload generation."""
+
+    def test_payload_includes_http_details_for_requests_error(self):
+        """HTTP status and URL should be exposed for requests HTTP errors."""
+        response = Mock()
+        response.status_code = 404
+        response.url = "https://example.org/test"
+        response.text = '{"detail":"not found"}'
+        exc = requests.HTTPError("404 Client Error")
+        exc.response = response
+
+        payload = _build_tool_error_payload("test-op", exc, verbose=False)
+
+        assert payload["error"]["operation"] == "test-op"
+        assert payload["error"]["type"] == "HTTPError"
+        assert payload["error"]["http"]["status_code"] == 404
+        assert payload["error"]["http"]["url"] == "https://example.org/test"
+        assert "hint" in payload["error"]
+        assert "traceback" not in payload["error"]
+
+    def test_payload_includes_traceback_in_verbose_mode(self):
+        """Traceback should be included when verbose mode is enabled."""
+        try:
+            raise RuntimeError("boom")
+        except RuntimeError as exc:
+            payload = _build_tool_error_payload(
+                "verbose-op", exc, verbose=True)
+
+        assert payload["error"]["operation"] == "verbose-op"
+        assert payload["error"]["type"] == "RuntimeError"
+        assert "traceback" in payload["error"]
+        assert "RuntimeError: boom" in payload["error"]["traceback"]
 
 
 class TestSanitizeTsvField:
@@ -174,6 +226,11 @@ class TestParseFlmdFile:
 
         assert len(result) == 1
         assert "file1.csv" in result
+
+    def test_parse_flmd_invalid_content_raises_value_error(self):
+        """Test that malformed input raises a clear parsing error."""
+        with pytest.raises(ValueError, match="Invalid FLMD CSV content"):
+            parse_flmd_file(123)  # type: ignore[arg-type]
 
 
 class TestESSDiveClient:

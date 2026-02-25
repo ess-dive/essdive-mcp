@@ -67,6 +67,12 @@ You can also provide the token via a file to avoid putting it in shell history:
 uv run python src/essdive_mcp/main.py --token-file /path/to/token.txt
 ```
 
+Enable verbose diagnostics (debug logs + traceback details in tool errors):
+
+```bash
+uv run python src/essdive_mcp/main.py --token-file /path/to/token.txt --verbose
+```
+
 Note: the environment variable name is `ESSDIVE_API_TOKEN` (no underscore between
 ESS and DIVE).
 
@@ -229,14 +235,33 @@ Remove the links later with:
 
 ### Command Line Options
 
-- `--name`: Set the name of the MCP server (default: `essdive-server`)
-- `--token`: Provide an ESS-DIVE API token for authentication
+- `--token`, `-t`: Provide an ESS-DIVE API token for authentication.
+- `--token-file`: Path to a file containing the ESS-DIVE API token.
+- `--verbose`, `-v`: Enable verbose logging and include traceback details in tool error responses.
 
 ### Environment Variables
 
 The server can also be configured using environment variables:
 
 - `ESSDIVE_API_TOKEN`: Your ESS-DIVE API token. This is used for authenticated requests to the ESS-DIVE API. It can be used as an alternative to the `--token` command-line argument.
+- `ESSDIVE_MCP_VERBOSE`: Optional boolean flag (`1`, `true`, `yes`, `on`) to enable verbose diagnostics without passing `--verbose`.
+
+### Testing
+
+Unit tests (default CI behavior):
+
+```bash
+uv run pytest tests/ -m "not integration"
+```
+
+Integration tests (live ESS-DIVE/ESS-DeepDive calls):
+
+```bash
+export ESSDIVE_API_TOKEN="YOUR_ESS_DIVE_TOKEN_HERE"
+uv run pytest tests/integration -m integration
+```
+
+Note: ESS-DIVE integration tests require `ESSDIVE_API_TOKEN` in the environment where tests are executed.
 
 ### Using with Claude Desktop
 

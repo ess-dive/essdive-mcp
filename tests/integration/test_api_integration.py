@@ -85,7 +85,10 @@ def test_search_ess_deepdive_live(
 ):
     """Fixture ESS-DeepDive searches should return valid response shapes."""
     for example in essdeepdive_search_examples:
-        response = search_ess_deepdive(**example)
+        response = search_ess_deepdive(
+            field_name=str(example["field_name"]),
+            page_size=int(example["page_size"]),
+        )
 
         assert isinstance(response, dict)
         assert "url" in response
@@ -102,9 +105,11 @@ def test_get_ess_deepdive_file_live_from_search_result(
     essdeepdive_search_examples: list[dict[str, int | str]],
 ):
     """A DOI/file pair from search results should resolve to file-level metadata."""
-    query = dict(essdeepdive_search_examples[0])
-    query["page_size"] = 1
-    search_response = search_ess_deepdive(**query)
+    example = essdeepdive_search_examples[0]
+    search_response = search_ess_deepdive(
+        field_name=str(example["field_name"]),
+        page_size=1,
+    )
     first = search_response["results"][0]
 
     file_response = get_ess_deepdive_file(first["doi"], first["data_file"])

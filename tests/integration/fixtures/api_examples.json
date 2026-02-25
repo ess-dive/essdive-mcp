@@ -1,0 +1,70 @@
+{
+  "essdive": {
+    "datasets": [
+      {
+        "id": "ess-dive-7f9a048dfac0ade-20260122T002107310",
+        "doi": "doi:10.15485/2529445"
+      },
+      {
+        "id": "ess-dive-3e3ca22cd60ddff-20251202T181349898",
+        "doi": "doi:10.15485/2507279"
+      },
+      {
+        "id": "ess-dive-a50d0132afc030e-20250905T160628783",
+        "doi": "doi:10.15485/2507467"
+      }
+    ]
+  },
+  "essdeepdive": {
+    "search_queries": [
+      {
+        "field_name": "temperature",
+        "page_size": 5
+      },
+      {
+        "field_name": "soil",
+        "page_size": 3
+      }
+    ],
+    "download_examples": [
+      {
+        "field_name": "temperature",
+        "page_size": 1,
+        "bytes_to_read": 1024
+      },
+      {
+        "field_name": "soil",
+        "page_size": 1,
+        "bytes_to_read": 768
+      }
+    ],
+    "malformed_inputs": {
+      "search": [
+        {
+          "field_value_date": "not-a-date",
+          "page_size": 1
+        },
+        {
+          "field_value_numeric": "not-a-number",
+          "page_size": 1
+        }
+      ],
+      "dataset_file": [
+        {
+          "doi": "doi:10.15485/2529445",
+          "file_path": "definitely/not/real/file.csv"
+        },
+        {
+          "doi": "doi:10.00000/notreal",
+          "file_path": "file.csv"
+        }
+      ]
+    }
+  },
+  "malformed": {
+    "essdive_ids": [
+      "invalid-id",
+      "doi:10.99999/notreal"
+    ]
+  }
+}

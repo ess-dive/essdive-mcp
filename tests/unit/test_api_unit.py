@@ -6,20 +6,20 @@ from essdive_mcp.main import (
     parse_flmd_file,
     sanitize_tsv_field,
     _norm_header_key,
+    _is_truthy,
+    _build_tool_error_payload,
     _normalize_doi,
     doi_to_essdive_id,
     essdive_id_to_doi,
     search_ess_deepdive,
     get_ess_deepdive_dataset,
     get_ess_deepdive_file,
+    _summarize_essdeepdive_file_response,
 )
 import pytest
-import sys
 import os
+import requests
 from unittest.mock import Mock, patch, AsyncMock
-
-# Add the src directory to the path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 
 class TestGetApiKey:
@@ -47,6 +47,59 @@ class TestGetApiKey:
         with patch.dict(os.environ, {}, clear=True):
             with pytest.raises(ValueError, match="ESS-DIVE API key is required"):
                 get_api_key(None)
+
+
+class TestBooleanHelpers:
+    """Tests for truthy helper parsing."""
+
+    def test_is_truthy_true_values(self):
+        """Truthy values are accepted case-insensitively."""
+        assert _is_truthy("1")
+        assert _is_truthy("true")
+        assert _is_truthy("YES")
+        assert _is_truthy(" On ")
+
+    def test_is_truthy_false_values(self):
+        """Falsy/empty values are rejected."""
+        assert not _is_truthy("0")
+        assert not _is_truthy("false")
+        assert not _is_truthy("")
+        assert not _is_truthy(None)
+
+
+class TestToolErrorPayload:
+    """Tests for standard MCP error payload generation."""
+
+    def test_payload_includes_http_details_for_requests_error(self):
+        """HTTP status and URL should be exposed for requests HTTP errors."""
+        response = Mock()
+        response.status_code = 404
+        response.url = "https://example.org/test"
+        response.text = '{"detail":"not found"}'
+        exc = requests.HTTPError("404 Client Error")
+        exc.response = response
+
+        payload = _build_tool_error_payload("test-op", exc, verbose=False)
+
+        assert payload["error"]["operation"] == "test-op"
+        assert payload["error"]["type"] == "HTTPError"
+        assert payload["error"]["http"]["status_code"] == 404
+        assert payload["error"]["http"]["url"] == "https://example.org/test"
+        assert "hint" in payload["error"]
+        assert "traceback" not in payload["error"]
+
+    def test_payload_includes_traceback_in_verbose_mode(self):
+        """Traceback should be included when verbose mode is enabled."""
+        try:
+            raise RuntimeError("boom")
+        except RuntimeError as exc:
+            payload = _build_tool_error_payload(
+                "verbose-op", exc, verbose=True)
+
+        assert payload["error"]["operation"] == "verbose-op"
+        assert payload["error"]["type"] == "RuntimeError"
+        assert "traceback" in payload["error"]
+        assert "RuntimeError: boom" in payload["error"]["traceback"]
 
 
 class TestSanitizeTsvField:
@@ -174,6 +227,11 @@ class TestParseFlmdFile:
 
         assert len(result) == 1
         assert "file1.csv" in result
+
+    def test_parse_flmd_invalid_content_raises_value_error(self):
+        """Test that malformed input raises a clear parsing error."""
+        with pytest.raises(ValueError, match="Invalid FLMD CSV content"):
+            parse_flmd_file(123)  # type: ignore[arg-type]
 
 
 class TestESSDiveClient:
@@ -529,6 +587,57 @@ class TestDoiConversion:
             result = essdive_id_to_doi("ess-dive-test-id-67890")
             assert result == "doi:10.1234/test2"
 
+    def test_essdive_id_to_doi_uses_dataset_at_id(self):
+        """Test ESS-DIVE ID to DOI conversion using dataset @id field."""
+        mock_response = {
+            "id": "ess-dive-test-id-at-id",
+            "dataset": {
+                "name": "Test Dataset",
+                "@id": "doi:10.1234/test3",
+            }
+        }
+
+        mock_response_obj = Mock()
+        mock_response_obj.json.return_value = mock_response
+        mock_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            result = essdive_id_to_doi("ess-dive-test-id-at-id")
+            assert result == "doi:10.1234/test3"
+
+    def test_essdive_id_to_doi_prefers_dataset_at_id_over_doi(self):
+        """Test @id is preferred when both @id and doi fields are present."""
+        mock_response = {
+            "id": "ess-dive-test-id-both",
+            "dataset": {
+                "name": "Test Dataset",
+                "@id": "doi:10.1234/preferred",
+                "doi": "10.1234/fallback",
+            }
+        }
+
+        mock_response_obj = Mock()
+        mock_response_obj.json.return_value = mock_response
+        mock_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            result = essdive_id_to_doi("ess-dive-test-id-both")
+            assert result == "doi:10.1234/preferred"
+
     def test_essdive_id_to_doi_missing_doi(self):
         """Test ESS-DIVE ID to DOI conversion when response has no DOI."""
         mock_response = {
@@ -552,6 +661,90 @@ class TestDoiConversion:
 
             with pytest.raises(ValueError, match="No DOI found"):
                 essdive_id_to_doi("ess-dive-test-id-12345")
+
+
+class TestMalformedApiResponses:
+    """Tests for malformed payloads/responses from ESS-DIVE/ESS-DeepDive."""
+
+    @pytest.mark.asyncio
+    async def test_get_dataset_malformed_json_raises_value_error(self):
+        """Invalid JSON payloads from ESS-DIVE should raise a parse error."""
+        client = ESSDiveClient(api_token="test_token")
+        mock_response_obj = Mock()
+        mock_response_obj.raise_for_status = Mock()
+        mock_response_obj.json.side_effect = ValueError("malformed JSON")
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            with pytest.raises(ValueError, match="malformed JSON"):
+                await client.get_dataset("ds1")
+
+    def test_doi_to_essdive_id_malformed_response_raises_value_error(self):
+        """Non-dict ESS-DIVE responses should be surfaced as conversion failures."""
+        mock_response_obj = Mock()
+        mock_response_obj.raise_for_status = Mock()
+        mock_response_obj.json.return_value = ["unexpected", "list"]
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            with pytest.raises(ValueError, match="Failed to convert DOI"):
+                doi_to_essdive_id("10.1234/test")
+
+    def test_essdive_id_to_doi_malformed_dataset_type_raises_value_error(self):
+        """Malformed dataset payloads should not be silently accepted."""
+        mock_response_obj = Mock()
+        mock_response_obj.raise_for_status = Mock()
+        mock_response_obj.json.return_value = {
+            "id": "ess-dive-test-id",
+            "dataset": ["not", "a", "dict"],
+        }
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            with pytest.raises(ValueError, match="Failed to convert ESS-DIVE ID"):
+                essdive_id_to_doi("ess-dive-test-id")
+
+    def test_search_ess_deepdive_malformed_json_raises_value_error(self):
+        """Malformed ESS-DeepDive JSON responses should raise parsing errors."""
+        with patch("essdive_mcp.main.requests.get") as mock_get:
+            mock_response_obj = Mock()
+            mock_response_obj.raise_for_status = Mock()
+            mock_response_obj.json.side_effect = ValueError(
+                "invalid deepdive JSON")
+            mock_get.return_value = mock_response_obj
+
+            with pytest.raises(ValueError, match="invalid deepdive JSON"):
+                search_ess_deepdive(field_name="temperature")
+
+    def test_get_ess_deepdive_dataset_http_error_is_propagated(self):
+        """HTTP errors from malformed ESS-DeepDive file lookups should propagate."""
+        with patch("essdive_mcp.main.requests.get") as mock_get:
+            mock_response_obj = Mock()
+            mock_response_obj.raise_for_status.side_effect = requests.HTTPError(
+                "404 not found"
+            )
+            mock_get.return_value = mock_response_obj
+
+            with pytest.raises(requests.HTTPError, match="404 not found"):
+                get_ess_deepdive_dataset("doi:10.1234/test", "missing.csv")
 
 
 class TestSearchEssDeepDive:
@@ -835,6 +1028,53 @@ class TestGetEssDeepDiveFile:
             assert result1 == result2
             # Should have been called twice (once for each function)
             assert mock_get.call_count == 2
+
+
+class TestEssDeepDiveFileSummary:
+    """Tests for normalization of ESS-DeepDive file summary fields."""
+
+    def test_summary_uses_current_api_keys(self):
+        """Summary should map current ESS-DeepDive response keys correctly."""
+        response = {
+            "doi": "doi:10.1234/test",
+            "data_file": "dataset.csv",
+            "fields": [{"fieldName": "temperature"}],
+            "data_download": {
+                "contentSize": 1000,
+                "encodingFormat": "text/csv",
+                "contentUrl": "https://example.org/dataset.csv",
+            },
+        }
+
+        summary = _summarize_essdeepdive_file_response(response)
+
+        assert summary["doi"] == "doi:10.1234/test"
+        assert summary["file_name"] == "dataset.csv"
+        assert summary["file_path"] == "dataset.csv"
+        assert summary["total_fields"] == 1
+        assert summary["field_names"] == ["temperature"]
+        assert summary["download_info"]["encoding_format"] == "text/csv"
+        assert summary["download_info"]["content_url"] == "https://example.org/dataset.csv"
+
+    def test_summary_supports_legacy_fallback_keys(self):
+        """Summary should still support legacy key names."""
+        response = {
+            "doi": "doi:10.1234/test",
+            "file_name": "legacy.csv",
+            "file_path": "legacy/path.csv",
+            "data_download": {
+                "contentSize": 1000,
+                "encoding_format": "text/csv",
+                "contentURL": "https://example.org/legacy.csv",
+            },
+        }
+
+        summary = _summarize_essdeepdive_file_response(response)
+
+        assert summary["file_name"] == "legacy.csv"
+        assert summary["file_path"] == "legacy/path.csv"
+        assert summary["download_info"]["encoding_format"] == "text/csv"
+        assert summary["download_info"]["content_url"] == "https://example.org/legacy.csv"
 
 
 def test_reality():

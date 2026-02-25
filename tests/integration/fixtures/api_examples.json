@@ -37,6 +37,34 @@
         "page_size": 1,
         "bytes_to_read": 768
       }
+    ],
+    "malformed_inputs": {
+      "search": [
+        {
+          "field_value_date": "not-a-date",
+          "page_size": 1
+        },
+        {
+          "field_value_numeric": "not-a-number",
+          "page_size": 1
+        }
+      ],
+      "dataset_file": [
+        {
+          "doi": "doi:10.15485/2529445",
+          "file_path": "definitely/not/real/file.csv"
+        },
+        {
+          "doi": "doi:10.00000/notreal",
+          "file_path": "file.csv"
+        }
+      ]
+    }
+  },
+  "malformed": {
+    "essdive_ids": [
+      "invalid-id",
+      "doi:10.99999/notreal"
     ]
   }
 }

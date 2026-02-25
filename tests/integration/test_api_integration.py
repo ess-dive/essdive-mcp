@@ -1,11 +1,15 @@
 """Integration tests that call live ESS-DIVE / ESS-DeepDive APIs."""
 
+from typing import Any
+
 import pytest
 import requests
+import httpx
 
 from essdive_mcp.main import (
     ESSDiveClient,
     doi_to_essdive_id,
+    get_ess_deepdive_dataset,
     get_ess_deepdive_file,
     search_ess_deepdive,
 )
@@ -163,3 +167,41 @@ def test_essdeepdive_file_download_partial_read_live(
         if "text" in content_type or "csv" in content_type:
             text_prefix = blob.decode("utf-8", errors="replace")
             assert "," in text_prefix or "\t" in text_prefix
+
+
+@pytest.mark.asyncio
+async def test_essdive_malformed_identifier_raises_http_error(
+    essdive_api_token: str,
+    malformed_essdive_ids: list[str],
+):
+    """Malformed ESS-DIVE identifiers should return HTTP errors."""
+    client = ESSDiveClient(api_token=essdive_api_token)
+    for bad_id in malformed_essdive_ids:
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.get_dataset(bad_id)
+
+
+def test_essdeepdive_malformed_search_inputs_raise_http_error(
+    malformed_essdeepdive_search_inputs: list[dict[str, Any]],
+):
+    """Malformed ESS-DeepDive search parameters should be rejected by the API."""
+    for bad_input in malformed_essdeepdive_search_inputs:
+        with pytest.raises(requests.HTTPError):
+            search_ess_deepdive(
+                field_name=bad_input.get("field_name"),
+                field_value_date=bad_input.get("field_value_date"),
+                field_value_numeric=bad_input.get("field_value_numeric"),
+                page_size=int(bad_input.get("page_size", 1)),
+            )
+
+
+def test_essdeepdive_malformed_dataset_file_inputs_raise_http_error(
+    malformed_essdeepdive_dataset_inputs: list[dict[str, str]],
+):
+    """Malformed ESS-DeepDive DOI/file lookups should return HTTP errors."""
+    for bad_input in malformed_essdeepdive_dataset_inputs:
+        with pytest.raises(requests.HTTPError):
+            get_ess_deepdive_dataset(
+                doi=bad_input["doi"],
+                file_path=bad_input["file_path"],
+            )

@@ -611,6 +611,90 @@ class TestDoiConversion:
                 essdive_id_to_doi("ess-dive-test-id-12345")
 
 
+class TestMalformedApiResponses:
+    """Tests for malformed payloads/responses from ESS-DIVE/ESS-DeepDive."""
+
+    @pytest.mark.asyncio
+    async def test_get_dataset_malformed_json_raises_value_error(self):
+        """Invalid JSON payloads from ESS-DIVE should raise a parse error."""
+        client = ESSDiveClient(api_token="test_token")
+        mock_response_obj = Mock()
+        mock_response_obj.raise_for_status = Mock()
+        mock_response_obj.json.side_effect = ValueError("malformed JSON")
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            with pytest.raises(ValueError, match="malformed JSON"):
+                await client.get_dataset("ds1")
+
+    def test_doi_to_essdive_id_malformed_response_raises_value_error(self):
+        """Non-dict ESS-DIVE responses should be surfaced as conversion failures."""
+        mock_response_obj = Mock()
+        mock_response_obj.raise_for_status = Mock()
+        mock_response_obj.json.return_value = ["unexpected", "list"]
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            with pytest.raises(ValueError, match="Failed to convert DOI"):
+                doi_to_essdive_id("10.1234/test")
+
+    def test_essdive_id_to_doi_malformed_dataset_type_raises_value_error(self):
+        """Malformed dataset payloads should not be silently accepted."""
+        mock_response_obj = Mock()
+        mock_response_obj.raise_for_status = Mock()
+        mock_response_obj.json.return_value = {
+            "id": "ess-dive-test-id",
+            "dataset": ["not", "a", "dict"],
+        }
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            with pytest.raises(ValueError, match="Failed to convert ESS-DIVE ID"):
+                essdive_id_to_doi("ess-dive-test-id")
+
+    def test_search_ess_deepdive_malformed_json_raises_value_error(self):
+        """Malformed ESS-DeepDive JSON responses should raise parsing errors."""
+        with patch("essdive_mcp.main.requests.get") as mock_get:
+            mock_response_obj = Mock()
+            mock_response_obj.raise_for_status = Mock()
+            mock_response_obj.json.side_effect = ValueError(
+                "invalid deepdive JSON")
+            mock_get.return_value = mock_response_obj
+
+            with pytest.raises(ValueError, match="invalid deepdive JSON"):
+                search_ess_deepdive(field_name="temperature")
+
+    def test_get_ess_deepdive_dataset_http_error_is_propagated(self):
+        """HTTP errors from malformed ESS-DeepDive file lookups should propagate."""
+        with patch("essdive_mcp.main.requests.get") as mock_get:
+            mock_response_obj = Mock()
+            mock_response_obj.raise_for_status.side_effect = requests.HTTPError(
+                "404 not found"
+            )
+            mock_get.return_value = mock_response_obj
+
+            with pytest.raises(requests.HTTPError, match="404 not found"):
+                get_ess_deepdive_dataset("doi:10.1234/test", "missing.csv")
+
+
 class TestSearchEssDeepDive:
     """Tests for the search_ess_deepdive function."""
 

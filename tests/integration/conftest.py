@@ -45,3 +45,25 @@ def essdeepdive_search_examples(api_examples: dict[str, Any]) -> list[dict[str, 
 def essdeepdive_download_examples(api_examples: dict[str, Any]) -> list[dict[str, Any]]:
     """Return ESS-DeepDive download examples from fixture file."""
     return api_examples["essdeepdive"]["download_examples"]
+
+
+@pytest.fixture(scope="session")
+def malformed_essdive_ids(api_examples: dict[str, Any]) -> list[str]:
+    """Return malformed ESS-DIVE identifiers for negative integration tests."""
+    return api_examples["malformed"]["essdive_ids"]
+
+
+@pytest.fixture(scope="session")
+def malformed_essdeepdive_search_inputs(
+    api_examples: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Return malformed ESS-DeepDive search parameters for negative tests."""
+    return api_examples["essdeepdive"]["malformed_inputs"]["search"]
+
+
+@pytest.fixture(scope="session")
+def malformed_essdeepdive_dataset_inputs(
+    api_examples: dict[str, Any],
+) -> list[dict[str, str]]:
+    """Return malformed ESS-DeepDive file lookup parameters for negative tests."""
+    return api_examples["essdeepdive"]["malformed_inputs"]["dataset_file"]

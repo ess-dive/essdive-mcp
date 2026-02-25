@@ -4,11 +4,11 @@ build-backend = "hatchling.build"
 
 [project]
 name = "essdive-mcp"
-version = "0.2.2"
+version = "0.2.3"
 description = "MCP Server for ESS-DIVE API"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = { text = "BSD-3-Clause" }
 dependencies = [
     "mcp>=1.6.0",
     "httpx>=0.24.0",

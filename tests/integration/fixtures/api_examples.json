@@ -1,0 +1,30 @@
+{
+  "essdive": {
+    "datasets": [
+      {
+        "id": "ess-dive-7f9a048dfac0ade-20260122T002107310",
+        "doi": "doi:10.15485/2529445"
+      },
+      {
+        "id": "ess-dive-3e3ca22cd60ddff-20251202T181349898",
+        "doi": "doi:10.15485/2507279"
+      },
+      {
+        "id": "ess-dive-a50d0132afc030e-20250905T160628783",
+        "doi": "doi:10.15485/2507467"
+      }
+    ]
+  },
+  "essdeepdive": {
+    "search_queries": [
+      {
+        "field_name": "temperature",
+        "page_size": 5
+      },
+      {
+        "field_name": "soil",
+        "page_size": 3
+      }
+    ]
+  }
+}

@@ -1,7 +1,5 @@
 """Integration tests that call live ESS-DIVE / ESS-DeepDive APIs."""
 
-import os
-
 import pytest
 
 from essdive_mcp.main import (
@@ -14,76 +12,78 @@ from essdive_mcp.main import (
 
 pytestmark = pytest.mark.integration
 
-TARGET_DATASET_ID = "ess-dive-7f9a048dfac0ade-20260122T002107310"
 
+@pytest.mark.asyncio
+async def test_get_dataset_by_id_live(
+    essdive_api_token: str,
+    essdive_dataset_examples: list[dict[str, str]],
+):
+    """Fixture dataset IDs should resolve to full ESS-DIVE entries."""
+    client = ESSDiveClient(api_token=essdive_api_token)
+    for example in essdive_dataset_examples:
+        response = await client.get_dataset(example["id"])
 
-@pytest.fixture(scope="session")
-def essdive_api_token() -> str:
-    """Return ESS-DIVE API token or skip ESS-DIVE integration tests."""
-    token = os.getenv("ESSDIVE_API_TOKEN")
-    if not token:
-        pytest.skip(
-            "ESSDIVE_API_TOKEN is required for ESS-DIVE integration tests."
-        )
-    return token
+        assert response["id"] == example["id"]
+        assert response.get("isPublic") is True
+        assert response.get("viewUrl")
+
+        dataset = response["dataset"]
+        assert dataset["name"]
+        assert dataset["@id"].startswith("doi:")
+        assert dataset["@id"] == example["doi"]
+        assert isinstance(dataset.get("creator"), list) and dataset["creator"]
+        assert isinstance(dataset.get("distribution"),
+                          list) and dataset["distribution"]
 
 
 @pytest.mark.asyncio
-async def test_get_dataset_by_id_live(essdive_api_token: str):
-    """The requested ESS-DIVE identifier should resolve to a real dataset."""
+async def test_get_dataset_by_doi_live_matches_id(
+    essdive_api_token: str,
+    essdive_dataset_examples: list[dict[str, str]],
+):
+    """Fixture DOIs should resolve back to the expected dataset IDs."""
     client = ESSDiveClient(api_token=essdive_api_token)
-    response = await client.get_dataset(TARGET_DATASET_ID)
-
-    assert response["id"] == TARGET_DATASET_ID
-    assert response.get("isPublic") is True
-    assert response.get("viewUrl")
-
-    dataset = response["dataset"]
-    assert dataset["name"]
-    assert dataset["@id"].startswith("doi:")
-    assert isinstance(dataset.get("creator"), list) and dataset["creator"]
-    assert isinstance(dataset.get("distribution"),
-                      list) and dataset["distribution"]
+    for example in essdive_dataset_examples:
+        by_doi = await client.get_dataset(example["doi"])
+        assert by_doi["id"] == example["id"]
 
 
-@pytest.mark.asyncio
-async def test_get_dataset_by_doi_live_matches_id(essdive_api_token: str):
-    """DOI lookup from dataset metadata should resolve back to the same dataset ID."""
-    client = ESSDiveClient(api_token=essdive_api_token)
-    by_id = await client.get_dataset(TARGET_DATASET_ID)
-    doi_identifier = by_id["dataset"]["@id"]
-
-    by_doi = await client.get_dataset(doi_identifier)
-    assert by_doi["id"] == TARGET_DATASET_ID
-
-
-def test_doi_to_essdive_id_live(essdive_api_token: str):
-    """The DOI from the target dataset should convert back to its ESS-DIVE ID."""
-    # DOI captured from the target dataset metadata and expected to stay stable.
-    doi = "doi:10.15485/2529445"
-    resolved_id = doi_to_essdive_id(doi, api_token=essdive_api_token)
-    assert resolved_id == TARGET_DATASET_ID
+def test_doi_to_essdive_id_live(
+    essdive_api_token: str,
+    essdive_dataset_examples: list[dict[str, str]],
+):
+    """Fixture DOIs should convert to the expected ESS-DIVE IDs."""
+    for example in essdive_dataset_examples:
+        resolved_id = doi_to_essdive_id(
+            example["doi"], api_token=essdive_api_token)
+        assert resolved_id == example["id"]
 
 
-def test_search_ess_deepdive_live():
-    """ESS-DeepDive live search should return a valid response shape."""
-    response = search_ess_deepdive(field_name="temperature", page_size=5)
+def test_search_ess_deepdive_live(
+    essdeepdive_search_examples: list[dict[str, int | str]],
+):
+    """Fixture ESS-DeepDive searches should return valid response shapes."""
+    for example in essdeepdive_search_examples:
+        response = search_ess_deepdive(**example)
 
-    assert isinstance(response, dict)
-    assert "url" in response
-    assert "pageCount" in response
-    assert isinstance(response["results"], list)
-    assert len(response["results"]) > 0
+        assert isinstance(response, dict)
+        assert "url" in response
+        assert "pageCount" in response
+        assert isinstance(response["results"], list)
+        assert len(response["results"]) > 0
 
-    first = response["results"][0]
-    assert first["doi"].startswith("doi:")
-    assert first["data_file"]
+        first = response["results"][0]
+        assert first["doi"].startswith("doi:")
+        assert first["data_file"]
 
 
-def test_get_ess_deepdive_file_live_from_search_result():
+def test_get_ess_deepdive_file_live_from_search_result(
+    essdeepdive_search_examples: list[dict[str, int | str]],
+):
     """A DOI/file pair from search results should resolve to file-level metadata."""
-    search_response = search_ess_deepdive(
-        field_name="temperature", page_size=1)
+    query = dict(essdeepdive_search_examples[0])
+    query["page_size"] = 1
+    search_response = search_ess_deepdive(**query)
     first = search_response["results"][0]
 
     file_response = get_ess_deepdive_file(first["doi"], first["data_file"])

@@ -15,7 +15,7 @@
       "source": "./",
       "strict": false,
       "skills": [
-        "./skills/essdive-datasets"
+        "../.agents/skills/essdive-datasets"
       ]
     },
     {
@@ -24,7 +24,7 @@
       "source": "./",
       "strict": false,
       "skills": [
-        "./skills/essdive-identifiers"
+        "../.agents/skills/essdive-identifiers"
       ]
     },
     {
@@ -33,7 +33,7 @@
       "source": "./",
       "strict": false,
       "skills": [
-        "./skills/essdeepdive"
+        "../.agents/skills/essdeepdive"
       ]
     }
   ]

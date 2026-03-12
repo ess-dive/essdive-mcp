@@ -48,7 +48,7 @@ import logging
 import traceback
 import requests
 from io import StringIO
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Union, Awaitable, TypeVar
 import httpx
 from urllib.parse import quote
 from urllib.parse import quote as url_quote
@@ -58,6 +58,7 @@ from fastmcp import FastMCP
 
 LOGGER = logging.getLogger("essdive_mcp")
 REQUEST_TIMEOUT_SECONDS = 30.0
+T = TypeVar("T")
 
 
 def _is_truthy(value: Optional[str]) -> bool:
@@ -194,6 +195,16 @@ def _tool_error_response(
 def _context_without_none(context: Dict[str, Any]) -> Dict[str, Any]:
     """Drop unset keys before emitting tool context."""
     return {key: value for key, value in context.items() if value is not None}
+
+
+def _run_in_new_event_loop(awaitable: Awaitable[T]) -> T:
+    """Run an awaitable in a dedicated event loop for sync helper functions."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(awaitable)
+    finally:
+        loop.close()
 
 
 def _format_dataset_search_bbox(
@@ -461,6 +472,18 @@ class ESSDiveClient:
         """Get headers for API requests."""
         return self.headers
 
+    def _package_url(self, identifier: str, suffix: str = "") -> str:
+        """Build a package endpoint URL for a dataset identifier."""
+        encoded_identifier = quote(identifier, safe="")
+        return f"{self.BASE_URL}/packages/{encoded_identifier}{suffix}"
+
+    async def _get_json(self, url: str) -> Dict[str, Any]:
+        """Fetch a JSON response from the ESS-DIVE API."""
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
+            response = await client.get(url, headers=self._get_headers())
+            response.raise_for_status()
+            return response.json()
+
     async def search_datasets(
         self,
         row_start: int = 1,
@@ -573,18 +596,13 @@ class ESSDiveClient:
             await client.get_dataset("ess-dive-9ea5fe57db73c90-20241024T093714082510")
             await client.get_dataset("doi:10.15485/2453885")
         """
-        # URL encode the identifier to handle special characters
-        encoded_identifier = quote(identifier, safe="")
-        url = f"{self.BASE_URL}/packages/{encoded_identifier}"
+        url = self._package_url(identifier)
         LOGGER.debug("ESS-DIVE get dataset request url=%s", url)
 
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-            response = await client.get(url, headers=self._get_headers())
-            response.raise_for_status()
-            result = response.json()
-            LOGGER.debug("ESS-DIVE get dataset response id=%s",
-                         result.get("id"))
-            return result
+        result = await self._get_json(url)
+        LOGGER.debug("ESS-DIVE get dataset response id=%s",
+                     result.get("id"))
+        return result
 
     async def get_dataset_status(self, identifier: str) -> Dict[str, Any]:
         """
@@ -599,17 +617,13 @@ class ESSDiveClient:
         Examples:
             await client.get_dataset_status("ess-dive-9ea5fe57db73c90-20241024T093714082510")
         """
-        encoded_identifier = quote(identifier, safe="")
-        url = f"{self.BASE_URL}/packages/{encoded_identifier}/status"
+        url = self._package_url(identifier, "/status")
         LOGGER.debug("ESS-DIVE get dataset status request url=%s", url)
 
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-            response = await client.get(url, headers=self._get_headers())
-            response.raise_for_status()
-            result = response.json()
-            LOGGER.debug(
-                "ESS-DIVE get dataset status response keys=%s", list(result.keys()))
-            return result
+        result = await self._get_json(url)
+        LOGGER.debug(
+            "ESS-DIVE get dataset status response keys=%s", list(result.keys()))
+        return result
 
     async def get_dataset_permissions(self, identifier: str) -> Dict[str, Any]:
         """
@@ -624,17 +638,13 @@ class ESSDiveClient:
         Examples:
             await client.get_dataset_permissions("ess-dive-9ea5fe57db73c90-20241024T093714082510")
         """
-        encoded_identifier = quote(identifier, safe="")
-        url = f"{self.BASE_URL}/packages/{encoded_identifier}/share"
+        url = self._package_url(identifier, "/share")
         LOGGER.debug("ESS-DIVE get dataset permissions request url=%s", url)
 
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-            response = await client.get(url, headers=self._get_headers())
-            response.raise_for_status()
-            result = response.json()
-            LOGGER.debug(
-                "ESS-DIVE get dataset permissions response keys=%s", list(result.keys()))
-            return result
+        result = await self._get_json(url)
+        LOGGER.debug(
+            "ESS-DIVE get dataset permissions response keys=%s", list(result.keys()))
+        return result
 
     def format_results(
         self, results: Dict[str, Any], format_type: str = "summary"
@@ -763,19 +773,12 @@ def doi_to_essdive_id(doi: str, api_token: Optional[str] = None) -> str:
     client = ESSDiveClient(api_token=api_token)
 
     try:
-        # Use asyncio to run the async function
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(
-                client.get_dataset(normalized_doi))
-            essdive_id = result.get("id")
-            if not essdive_id:
-                raise ValueError(
-                    f"No dataset ID found in response for DOI: {doi}")
-            return essdive_id
-        finally:
-            loop.close()
+        result = _run_in_new_event_loop(client.get_dataset(normalized_doi))
+        essdive_id = result.get("id")
+        if not essdive_id:
+            raise ValueError(
+                f"No dataset ID found in response for DOI: {doi}")
+        return essdive_id
     except Exception as e:
         raise ValueError(
             f"Failed to convert DOI {doi} to ESS-DIVE ID: {str(e)}") from e
@@ -802,21 +805,15 @@ def essdive_id_to_doi(essdive_id: str, api_token: Optional[str] = None) -> str:
     LOGGER.debug("Converting ESS-DIVE ID to DOI essdive_id=%s", essdive_id)
 
     try:
-        # Use asyncio to run the async function
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(client.get_dataset(essdive_id))
-            dataset_meta = result.get("dataset", {})
-            # ESS-DIVE currently returns DOI in dataset["@id"]; keep "doi" as fallback.
-            doi = dataset_meta.get("@id") or dataset_meta.get("doi")
-            if not doi:
-                raise ValueError(
-                    f"No DOI found in metadata for ESS-DIVE ID: {essdive_id}")
-            # Normalize the DOI
-            return _normalize_doi(doi)
-        finally:
-            loop.close()
+        result = _run_in_new_event_loop(client.get_dataset(essdive_id))
+        dataset_meta = result.get("dataset", {})
+        # ESS-DIVE currently returns DOI in dataset["@id"]; keep "doi" as fallback.
+        doi = dataset_meta.get("@id") or dataset_meta.get("doi")
+        if not doi:
+            raise ValueError(
+                f"No DOI found in metadata for ESS-DIVE ID: {essdive_id}")
+        # Normalize the DOI
+        return _normalize_doi(doi)
     except Exception as e:
         raise ValueError(
             f"Failed to convert ESS-DIVE ID {essdive_id} to DOI: {str(e)}") from e
@@ -1396,14 +1393,10 @@ def main():
                     }
                 )
 
-            geojson_obj: Dict[str, Any]
-            if features:
-                geojson_obj = {"type": "FeatureCollection",
-                               "features": features}
-            else:
-                if derived_bbox is None:
-                    raise ValueError("Provide either points or bbox.")
-                geojson_obj = _geojson_for_bbox(derived_bbox)
+            geojson_obj: Dict[str, Any] = {
+                "type": "FeatureCollection",
+                "features": features,
+            }
 
             response: Dict[str, Any] = {
                 "geojson": geojson_obj,

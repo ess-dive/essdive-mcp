@@ -1401,6 +1401,8 @@ def main():
                 geojson_obj = {"type": "FeatureCollection",
                                "features": features}
             else:
+                if derived_bbox is None:
+                    raise ValueError("Provide either points or bbox.")
                 geojson_obj = _geojson_for_bbox(derived_bbox)
 
             response: Dict[str, Any] = {

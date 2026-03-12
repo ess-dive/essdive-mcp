@@ -73,6 +73,35 @@ async def test_get_dataset_by_doi_live_matches_id(
         assert by_doi["id"] == example["id"]
 
 
+@pytest.mark.asyncio
+async def test_search_datasets_live_temporal_and_geospatial_filters(
+    essdive_api_token: str,
+    essdive_search_examples: list[dict[str, Any]],
+):
+    """Live ESS-DIVE searches should honor temporal and geospatial filters."""
+    client = ESSDiveClient(api_token=essdive_api_token)
+
+    for example in essdive_search_examples:
+        response = await client.search_datasets(
+            text=str(example["query"]),
+            begin_date=example.get("begin_date"),
+            end_date=example.get("end_date"),
+            bbox=example.get("bbox"),
+            lat=example.get("lat"),
+            lon=example.get("lon"),
+            radius=example.get("radius"),
+            is_public=True,
+            page_size=int(example.get("page_size", 10)),
+        )
+
+        assert isinstance(response, dict)
+        assert response["total"] > 0
+        assert isinstance(response["result"], list)
+
+        returned_ids = {item["id"] for item in response["result"]}
+        assert str(example["expected_id"]) in returned_ids
+
+
 def test_doi_to_essdive_id_live(
     essdive_api_token: str,
     essdive_dataset_examples: list[dict[str, str]],

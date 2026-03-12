@@ -13,6 +13,37 @@
         "id": "ess-dive-a50d0132afc030e-20250905T160628783",
         "doi": "doi:10.15485/2507467"
       }
+    ],
+    "search_queries": [
+      {
+        "name": "temporal_tropiroot",
+        "query": "TropiRoot",
+        "begin_date": "1986-01-01",
+        "end_date": "2019-01-01",
+        "page_size": 10,
+        "expected_id": "ess-dive-3e3ca22cd60ddff-20251202T181349898"
+      },
+      {
+        "name": "bbox_bionte",
+        "query": "BIONTE",
+        "bbox": [
+          -2.75,
+          -60.25,
+          -2.5,
+          -60.083
+        ],
+        "page_size": 10,
+        "expected_id": "ess-dive-a50d0132afc030e-20250905T160628783"
+      },
+      {
+        "name": "point_bionte",
+        "query": "BIONTE",
+        "lat": -2.625,
+        "lon": -60.1665,
+        "radius": 50000,
+        "page_size": 10,
+        "expected_id": "ess-dive-a50d0132afc030e-20250905T160628783"
+      }
     ]
   },
   "essdeepdive": {

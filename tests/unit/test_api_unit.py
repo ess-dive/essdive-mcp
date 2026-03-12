@@ -294,6 +294,129 @@ class TestESSDiveClient:
             assert result["result"][0]["id"] == "ds1"
 
     @pytest.mark.asyncio
+    async def test_search_datasets_includes_temporal_and_bbox_params(self):
+        """Temporal coverage and bbox filters should be forwarded to the API."""
+        client = ESSDiveClient(api_token="test_token")
+
+        mock_response_obj = Mock()
+        mock_response_obj.json.return_value = {"result": [], "total": 0}
+        mock_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            await client.search_datasets(
+                text="snow",
+                begin_date="2020",
+                end_date="2021-06",
+                bbox=[34.0, -119.0, 35.0, -117.0],
+            )
+
+            params = mock_client_instance.get.call_args.kwargs["params"]
+            assert params["beginDate"] == "2020"
+            assert params["endDate"] == "2021-06"
+            assert params["bbox"] == "34.0,-119.0,35.0,-117.0"
+
+    @pytest.mark.asyncio
+    async def test_search_datasets_accepts_string_bbox(self):
+        """bbox may be provided in the API's comma-delimited string format."""
+        client = ESSDiveClient(api_token="test_token")
+
+        mock_response_obj = Mock()
+        mock_response_obj.json.return_value = {"result": [], "total": 0}
+        mock_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            await client.search_datasets(
+                bbox="34.0,-119.0,35.0,-117.0",
+            )
+
+            params = mock_client_instance.get.call_args.kwargs["params"]
+            assert params["bbox"] == "34.0,-119.0,35.0,-117.0"
+
+    @pytest.mark.asyncio
+    async def test_search_datasets_includes_point_search_params(self):
+        """Point-based search params should be forwarded together."""
+        client = ESSDiveClient(api_token="test_token")
+
+        mock_response_obj = Mock()
+        mock_response_obj.json.return_value = {"result": [], "total": 0}
+        mock_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            await client.search_datasets(
+                lat=37.7749,
+                lon=-122.4194,
+                radius=5000,
+            )
+
+            params = mock_client_instance.get.call_args.kwargs["params"]
+            assert params["lat"] == 37.7749
+            assert params["lon"] == -122.4194
+            assert params["radius"] == 5000
+
+    @pytest.mark.asyncio
+    async def test_search_datasets_requires_complete_point_search_params(self):
+        """Point-based search requires lat, lon, and radius together."""
+        client = ESSDiveClient(api_token="test_token")
+
+        with pytest.raises(
+            ValueError,
+            match="lat, lon, and radius must all be provided together",
+        ):
+            await client.search_datasets(lat=37.7749, radius=5000)
+
+    @pytest.mark.asyncio
+    async def test_search_datasets_requires_positive_radius(self):
+        """Point-based search radius must be positive."""
+        client = ESSDiveClient(api_token="test_token")
+
+        with pytest.raises(
+            ValueError,
+            match="radius must be greater than 0 meters",
+        ):
+            await client.search_datasets(
+                lat=37.7749,
+                lon=-122.4194,
+                radius=0,
+            )
+
+    @pytest.mark.asyncio
+    async def test_search_datasets_rejects_bbox_and_point_search_together(self):
+        """bbox and point-based search should not be combined in one request."""
+        client = ESSDiveClient(api_token="test_token")
+
+        with pytest.raises(
+            ValueError,
+            match="Use either bbox or lat/lon/radius",
+        ):
+            await client.search_datasets(
+                bbox=[34.0, -119.0, 35.0, -117.0],
+                lat=37.7749,
+                lon=-122.4194,
+                radius=5000,
+            )
+
+    @pytest.mark.asyncio
     async def test_get_dataset(self):
         """Test get_dataset method."""
         client = ESSDiveClient(api_token="test_token")

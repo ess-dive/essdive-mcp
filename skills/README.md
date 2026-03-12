@@ -6,7 +6,7 @@ This directory contains skill definitions for Claude Code and Codex.
 
 ### essdive-datasets
 
-Search ESS-DIVE datasets, fetch metadata and permissions, and parse FLMD CSV content.
+Search ESS-DIVE datasets with keyword, temporal, and geographic filters; fetch metadata and permissions; and parse FLMD CSV content.
 
 See `essdive-datasets/SKILL.md` for full documentation.
 

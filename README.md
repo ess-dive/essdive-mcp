@@ -9,7 +9,7 @@ This project implements a Model Context Protocol server that allows language mod
 ## Features
 
 - **ESS-DIVE Dataset Tools**:
-  - Search for datasets with various filtering options (keywords, creators, dates, etc.)
+  - Search for datasets with keyword, creator, publication date, temporal coverage, and geographic filters
   - Retrieve detailed information about specific datasets
   - Access dataset metadata, creators, keywords, and file listings
   - Get dataset sharing permissions
@@ -39,6 +39,12 @@ This project implements a Model Context Protocol server that allows language mod
       "result": "Found 5 datasets. Showing 5 results:\n\n1. Groundwater and Surface Water Flow (GSFLOW) model files to explore bedrock circulation depth and porosity in Copper Creek, Colorado\n   ID: ess-dive-9ea5fe57db73c
     90-20241024T093714082510\n   Published: 2024\n   URL: https://data.ess-dive.lbl.gov/view/doi:10.15485/2453885\n\n2. Data from: \"Warming and provenance limit tree recruitment across and beyond the elevation range of su
     …
+```
+
+```
+> Search ESS-DIVE for datasets covering 2020 to 2021 near San Francisco within 5 km.
+
+● essdive-mcp - search-datasets (MCP)(query: "soil moisture", begin_date: "2020", end_date: "2021", lat: 37.7749, lon: -122.4194, radius: 5000, format: "summary")
 ```
 
 ## Installation
@@ -284,7 +290,13 @@ Search for datasets in the ESS-DIVE repository with flexible filtering options.
 - `creator` (optional): Filter by dataset creator
 - `provider_name` (optional): Filter by dataset project/provider
 - `date_published` (optional): Filter by publication date (e.g., "[2016 TO 2023]")
+- `begin_date` (optional): Temporal coverage window start date in `YYYY`, `YYYY-MM`, or `YYYY-MM-DD`
+- `end_date` (optional): Temporal coverage window end date in `YYYY`, `YYYY-MM`, or `YYYY-MM-DD`
 - `keywords` (optional): Search for datasets with specific keywords (string or list)
+- `bbox` (optional): Bounding box as `"min_lat,min_lon,max_lat,max_lon"` or `[min_lat, min_lon, max_lat, max_lon]`
+- `lat` (optional): Latitude for point-based nearby search; must be used with `lon` and `radius`
+- `lon` (optional): Longitude for point-based nearby search; must be used with `lat` and `radius`
+- `radius` (optional): Point-based search radius in meters; must be used with `lat` and `lon`
 - `row_start` (optional): The row number to start on for pagination (default: 1)
 - `page_size` (optional): Number of results per page, max 100 (default: 25)
 - `format` (optional): Format of results - `summary`, `detailed`, or `raw` (default: summary)
@@ -292,6 +304,9 @@ Search for datasets in the ESS-DIVE repository with flexible filtering options.
 **Example:**
 ```
 search-datasets with query="soil carbon" and page_size=10
+search-datasets with begin_date="2020" and end_date="2021-06" and format="detailed"
+search-datasets with bbox=[34.0, -119.0, 35.0, -117.0]
+search-datasets with lat=37.7749 and lon=-122.4194 and radius=5000
 ```
 
 #### get-dataset

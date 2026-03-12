@@ -54,6 +54,24 @@ Filter by creator and provider:
 search-datasets with creator="Smith" and provider_name="NGEE Arctic" and page_size=5
 ```
 
+Filter by temporal coverage:
+
+```
+search-datasets with begin_date="2020" and end_date="2021-06" and format="detailed"
+```
+
+Filter by bounding box:
+
+```
+search-datasets with bbox=[34.0, -119.0, 35.0, -117.0]
+```
+
+Filter by nearby point search:
+
+```
+search-datasets with lat=37.7749 and lon=-122.4194 and radius=5000
+```
+
 Get detailed metadata for a dataset:
 
 ```
@@ -88,6 +106,8 @@ coords-to-map-links with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
 
 - Use `format="summary"` for compact results, or `format="detailed"` for full metadata.
 - `page_size` max is 100; `row_start` is 1-based.
+- `bbox` uses `[min_lat, min_lon, max_lat, max_lon]` ordering and can also be passed as a comma-delimited string.
+- Point search requires `lat`, `lon`, and `radius` together. Do not combine point search with `bbox`.
 
 ## Fallback (no MCP server)
 
@@ -99,8 +119,19 @@ curl -sG "https://api.ess-dive.lbl.gov/packages" \
   -H "User-Agent: Mozilla/5.0" \
   -H "Range: bytes=0-1000" \
   --data-urlencode "text=soil carbon" \
-  --data-urlencode "page_size=10" \
-  --data-urlencode "row_start=1" \
+  --data-urlencode "pageSize=10" \
+  --data-urlencode "rowStart=1" \
+  --data-urlencode "isPublic=true"
+```
+
+Search by temporal coverage and geography directly against the API:
+
+```bash
+curl -sG "https://api.ess-dive.lbl.gov/packages" \
+  -H "Accept: application/json" \
+  --data-urlencode "beginDate=2020" \
+  --data-urlencode "endDate=2021-06" \
+  --data-urlencode "bbox=34.0,-119.0,35.0,-117.0" \
   --data-urlencode "isPublic=true"
 ```
 

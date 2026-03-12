@@ -9,7 +9,8 @@ MCP Tools Available:
 
 **Dataset Search & Retrieval:**
   - search-datasets: Full-text search across ESS-DIVE datasets with filtering by creator,
-    provider, publication date, and keywords. Supports pagination and multiple result formats.
+    provider, publication date, temporal coverage, keywords, and geographic bounds/nearby
+    search. Supports pagination and multiple result formats.
   - get-dataset: Retrieve detailed metadata for a specific dataset including creators,
     keywords, description, and available data files.
   - get-dataset-permissions: Get sharing and access permission information for datasets.
@@ -193,6 +194,56 @@ def _tool_error_response(
 def _context_without_none(context: Dict[str, Any]) -> Dict[str, Any]:
     """Drop unset keys before emitting tool context."""
     return {key: value for key, value in context.items() if value is not None}
+
+
+def _format_dataset_search_bbox(
+    bbox: Union[str, List[float]],
+) -> str:
+    """Normalize a dataset-search bbox into the API's comma-delimited format."""
+    if isinstance(bbox, str):
+        parts = [part.strip() for part in bbox.split(",")]
+    else:
+        if len(bbox) != 4:
+            raise ValueError(
+                "bbox must contain exactly 4 values: min_lat,min_lon,max_lat,max_lon.")
+        parts = [str(float(value)) for value in bbox]
+
+    if len(parts) != 4:
+        raise ValueError(
+            "bbox must contain exactly 4 values: min_lat,min_lon,max_lat,max_lon.")
+
+    try:
+        return ",".join(str(float(part)) for part in parts)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "bbox values must be numeric and ordered as min_lat,min_lon,max_lat,max_lon."
+        ) from exc
+
+
+def _validate_dataset_search_spatial_params(
+    bbox: Optional[Union[str, List[float]]] = None,
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
+    radius: Optional[float] = None,
+) -> Optional[str]:
+    """Validate and normalize ESS-DIVE dataset spatial search parameters."""
+    point_search_requested = any(
+        value is not None for value in (lat, lon, radius))
+    if bbox is not None and point_search_requested:
+        raise ValueError(
+            "Use either bbox or lat/lon/radius for spatial search, not both.")
+
+    if point_search_requested and not all(value is not None for value in (lat, lon, radius)):
+        raise ValueError(
+            "lat, lon, and radius must all be provided together for point-based search.")
+
+    if radius is not None and radius <= 0:
+        raise ValueError("radius must be greater than 0 meters.")
+
+    if bbox is None:
+        return None
+
+    return _format_dataset_search_bbox(bbox)
 
 
 # Helper functions for FLMD parsing
@@ -419,7 +470,13 @@ class ESSDiveClient:
         provider_name: Optional[str] = None,
         text: Optional[str] = None,
         date_published: Optional[str] = None,
+        begin_date: Optional[str] = None,
+        end_date: Optional[str] = None,
         keywords: Optional[List[str]] = None,
+        bbox: Optional[Union[str, List[float]]] = None,
+        lat: Optional[float] = None,
+        lon: Optional[float] = None,
+        radius: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Search for datasets using the ESS-DIVE API.
@@ -432,7 +489,13 @@ class ESSDiveClient:
             provider_name: Filter by dataset project/provider
             text: Full-text search across metadata fields
             date_published: Filter by publication date
+            begin_date: Filter by temporal coverage window start date
+            end_date: Filter by temporal coverage window end date
             keywords: Search for datasets with specific keywords
+            bbox: Bounding box filter as "min_lat,min_lon,max_lat,max_lon" or [min_lat, min_lon, max_lat, max_lon]
+            lat: Latitude for point-based nearby search
+            lon: Longitude for point-based nearby search
+            radius: Search radius in meters for point-based nearby search
 
         Returns:
             API response containing search results
@@ -440,8 +503,16 @@ class ESSDiveClient:
         Examples:
             await client.search_datasets(text="soil carbon", page_size=5, is_public=True)
             await client.search_datasets(provider_name="NGEE Arctic", row_start=1, page_size=10)
+            await client.search_datasets(begin_date="2020", end_date="2021-06")
+            await client.search_datasets(bbox=[34.0, -119.0, 35.0, -117.0])
         """
         params: Dict[str, Any] = {}
+        normalized_bbox = _validate_dataset_search_spatial_params(
+            bbox=bbox,
+            lat=lat,
+            lon=lon,
+            radius=radius,
+        )
 
         # Always include pagination parameters
         params["rowStart"] = row_start
@@ -458,8 +529,20 @@ class ESSDiveClient:
             params["text"] = text
         if date_published:
             params["datePublished"] = date_published
+        if begin_date:
+            params["beginDate"] = begin_date
+        if end_date:
+            params["endDate"] = end_date
         if keywords:
             params["keywords"] = keywords
+        if normalized_bbox:
+            params["bbox"] = normalized_bbox
+        if lat is not None:
+            params["lat"] = lat
+        if lon is not None:
+            params["lon"] = lon
+        if radius is not None:
+            params["radius"] = radius
 
         url = f"{self.BASE_URL}/packages"
         LOGGER.debug("ESS-DIVE search request url=%s params=%s", url, params)
@@ -980,7 +1063,13 @@ def main():
         creator: Optional[str] = None,
         provider_name: Optional[str] = None,
         date_published: Optional[str] = None,
+        begin_date: Optional[str] = None,
+        end_date: Optional[str] = None,
         keywords: Optional[Union[str, List[str]]] = None,
+        bbox: Optional[Union[str, List[float]]] = None,
+        lat: Optional[float] = None,
+        lon: Optional[float] = None,
+        radius: Optional[float] = None,
         row_start: int = 1,
         page_size: int = 25,
         format: str = "summary",
@@ -993,7 +1082,13 @@ def main():
             creator: Filter by dataset creator
             provider_name: Filter by dataset project/provider
             date_published: Filter by publication date (e.g., "[2016 TO 2023]")
+            begin_date: Temporal coverage window start date (YYYY, YYYY-MM, or YYYY-MM-DD)
+            end_date: Temporal coverage window end date (YYYY, YYYY-MM, or YYYY-MM-DD)
             keywords: Search for datasets with specific keywords (string or list of strings)
+            bbox: Bounding box search as "min_lat,min_lon,max_lat,max_lon" or [min_lat, min_lon, max_lat, max_lon]
+            lat: Latitude for point-based nearby search
+            lon: Longitude for point-based nearby search
+            radius: Search radius in meters for point-based nearby search
             row_start: The row number to start on (for pagination)
             page_size: Number of results per page
             format: Format of the results (summary, detailed, raw)
@@ -1001,15 +1096,24 @@ def main():
         Examples:
             search-datasets with query="soil carbon" and page_size=10
             search-datasets with creator="Smith" and provider_name="NGEE Arctic"
+            search-datasets with begin_date="2020" and end_date="2021-06" and format="detailed"
+            search-datasets with bbox=[34.0, -119.0, 35.0, -117.0]
+            search-datasets with lat=37.7749 and lon=-122.4194 and radius=5000
 
         Returns:
             Formatted search results
         """
         LOGGER.debug(
-            "Tool search-datasets called query=%r creator=%r provider_name=%r row_start=%s page_size=%s format=%s",
+            "Tool search-datasets called query=%r creator=%r provider_name=%r begin_date=%r end_date=%r bbox=%r lat=%r lon=%r radius=%r row_start=%s page_size=%s format=%s",
             query,
             creator,
             provider_name,
+            begin_date,
+            end_date,
+            bbox,
+            lat,
+            lon,
+            radius,
             row_start,
             page_size,
             format,
@@ -1036,7 +1140,13 @@ def main():
                 provider_name=provider_name,
                 text=text,
                 date_published=date_published,
+                begin_date=begin_date,
+                end_date=end_date,
                 keywords=keywords_list,
+                bbox=bbox,
+                lat=lat,
+                lon=lon,
+                radius=radius,
             )
 
             # Format the results
@@ -1060,6 +1170,12 @@ def main():
                         "creator": creator,
                         "provider_name": provider_name,
                         "date_published": date_published,
+                        "begin_date": begin_date,
+                        "end_date": end_date,
+                        "bbox": bbox,
+                        "lat": lat,
+                        "lon": lon,
+                        "radius": radius,
                         "row_start": row_start,
                         "page_size": page_size,
                         "format": format,

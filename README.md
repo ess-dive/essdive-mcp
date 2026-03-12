@@ -204,7 +204,7 @@ uv run python /path/to/essdive-mcp/src/essdive_mcp/main.py --token-file /path/to
 
 ## Skills (Claude Code + Codex)
 
-This repository includes skill definitions under `skills/` that can be used by
+This repository includes skill definitions under `.agents/skills/` that can be used by
 Claude Code and Codex.
 
 ### Claude Code
@@ -221,9 +221,9 @@ Copy or symlink the skill folders into your Codex skills directory (usually
 `~/.codex/skills`), for example:
 
 ```
-ln -s "$(pwd)/skills/essdive-datasets" ~/.codex/skills/essdive-datasets
-ln -s "$(pwd)/skills/essdive-identifiers" ~/.codex/skills/essdive-identifiers
-ln -s "$(pwd)/skills/essdeepdive" ~/.codex/skills/essdeepdive
+ln -s "$(pwd)/.agents/skills/essdive-datasets" ~/.codex/skills/essdive-datasets
+ln -s "$(pwd)/.agents/skills/essdive-identifiers" ~/.codex/skills/essdive-identifiers
+ln -s "$(pwd)/.agents/skills/essdeepdive" ~/.codex/skills/essdeepdive
 ```
 
 Or use the helper script:

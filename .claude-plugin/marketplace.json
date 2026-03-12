@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Skills for ESS-DIVE dataset search, identifier conversion, and ESS-DeepDive queries",
-    "version": "0.2.2"
+    "version": "0.2.3"
   },
   "plugins": [
     {

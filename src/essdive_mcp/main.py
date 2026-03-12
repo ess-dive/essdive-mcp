@@ -9,7 +9,8 @@ MCP Tools Available:
 
 **Dataset Search & Retrieval:**
   - search-datasets: Full-text search across ESS-DIVE datasets with filtering by creator,
-    provider, publication date, and keywords. Supports pagination and multiple result formats.
+    provider, publication date, temporal coverage, keywords, and geographic bounds/nearby
+    search. Supports pagination and multiple result formats.
   - get-dataset: Retrieve detailed metadata for a specific dataset including creators,
     keywords, description, and available data files.
   - get-dataset-permissions: Get sharing and access permission information for datasets.
@@ -47,7 +48,7 @@ import logging
 import traceback
 import requests
 from io import StringIO
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any, Union, Awaitable, TypeVar
 import httpx
 from urllib.parse import quote
 from urllib.parse import quote as url_quote
@@ -57,6 +58,7 @@ from fastmcp import FastMCP
 
 LOGGER = logging.getLogger("essdive_mcp")
 REQUEST_TIMEOUT_SECONDS = 30.0
+T = TypeVar("T")
 
 
 def _is_truthy(value: Optional[str]) -> bool:
@@ -193,6 +195,66 @@ def _tool_error_response(
 def _context_without_none(context: Dict[str, Any]) -> Dict[str, Any]:
     """Drop unset keys before emitting tool context."""
     return {key: value for key, value in context.items() if value is not None}
+
+
+def _run_in_new_event_loop(awaitable: Awaitable[T]) -> T:
+    """Run an awaitable in a dedicated event loop for sync helper functions."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(awaitable)
+    finally:
+        loop.close()
+
+
+def _format_dataset_search_bbox(
+    bbox: Union[str, List[float]],
+) -> str:
+    """Normalize a dataset-search bbox into the API's comma-delimited format."""
+    if isinstance(bbox, str):
+        parts = [part.strip() for part in bbox.split(",")]
+    else:
+        if len(bbox) != 4:
+            raise ValueError(
+                "bbox must contain exactly 4 values: min_lat,min_lon,max_lat,max_lon.")
+        parts = [str(float(value)) for value in bbox]
+
+    if len(parts) != 4:
+        raise ValueError(
+            "bbox must contain exactly 4 values: min_lat,min_lon,max_lat,max_lon.")
+
+    try:
+        return ",".join(str(float(part)) for part in parts)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "bbox values must be numeric and ordered as min_lat,min_lon,max_lat,max_lon."
+        ) from exc
+
+
+def _validate_dataset_search_spatial_params(
+    bbox: Optional[Union[str, List[float]]] = None,
+    lat: Optional[float] = None,
+    lon: Optional[float] = None,
+    radius: Optional[float] = None,
+) -> Optional[str]:
+    """Validate and normalize ESS-DIVE dataset spatial search parameters."""
+    point_search_requested = any(
+        value is not None for value in (lat, lon, radius))
+    if bbox is not None and point_search_requested:
+        raise ValueError(
+            "Use either bbox or lat/lon/radius for spatial search, not both.")
+
+    if point_search_requested and not all(value is not None for value in (lat, lon, radius)):
+        raise ValueError(
+            "lat, lon, and radius must all be provided together for point-based search.")
+
+    if radius is not None and radius <= 0:
+        raise ValueError("radius must be greater than 0 meters.")
+
+    if bbox is None:
+        return None
+
+    return _format_dataset_search_bbox(bbox)
 
 
 # Helper functions for FLMD parsing
@@ -410,6 +472,18 @@ class ESSDiveClient:
         """Get headers for API requests."""
         return self.headers
 
+    def _package_url(self, identifier: str, suffix: str = "") -> str:
+        """Build a package endpoint URL for a dataset identifier."""
+        encoded_identifier = quote(identifier, safe="")
+        return f"{self.BASE_URL}/packages/{encoded_identifier}{suffix}"
+
+    async def _get_json(self, url: str) -> Dict[str, Any]:
+        """Fetch a JSON response from the ESS-DIVE API."""
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
+            response = await client.get(url, headers=self._get_headers())
+            response.raise_for_status()
+            return response.json()
+
     async def search_datasets(
         self,
         row_start: int = 1,
@@ -419,7 +493,13 @@ class ESSDiveClient:
         provider_name: Optional[str] = None,
         text: Optional[str] = None,
         date_published: Optional[str] = None,
+        begin_date: Optional[str] = None,
+        end_date: Optional[str] = None,
         keywords: Optional[List[str]] = None,
+        bbox: Optional[Union[str, List[float]]] = None,
+        lat: Optional[float] = None,
+        lon: Optional[float] = None,
+        radius: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Search for datasets using the ESS-DIVE API.
@@ -432,7 +512,13 @@ class ESSDiveClient:
             provider_name: Filter by dataset project/provider
             text: Full-text search across metadata fields
             date_published: Filter by publication date
+            begin_date: Filter by temporal coverage window start date
+            end_date: Filter by temporal coverage window end date
             keywords: Search for datasets with specific keywords
+            bbox: Bounding box filter as "min_lat,min_lon,max_lat,max_lon" or [min_lat, min_lon, max_lat, max_lon]
+            lat: Latitude for point-based nearby search
+            lon: Longitude for point-based nearby search
+            radius: Search radius in meters for point-based nearby search
 
         Returns:
             API response containing search results
@@ -440,8 +526,16 @@ class ESSDiveClient:
         Examples:
             await client.search_datasets(text="soil carbon", page_size=5, is_public=True)
             await client.search_datasets(provider_name="NGEE Arctic", row_start=1, page_size=10)
+            await client.search_datasets(begin_date="2020", end_date="2021-06")
+            await client.search_datasets(bbox=[34.0, -119.0, 35.0, -117.0])
         """
         params: Dict[str, Any] = {}
+        normalized_bbox = _validate_dataset_search_spatial_params(
+            bbox=bbox,
+            lat=lat,
+            lon=lon,
+            radius=radius,
+        )
 
         # Always include pagination parameters
         params["rowStart"] = row_start
@@ -458,8 +552,20 @@ class ESSDiveClient:
             params["text"] = text
         if date_published:
             params["datePublished"] = date_published
+        if begin_date:
+            params["beginDate"] = begin_date
+        if end_date:
+            params["endDate"] = end_date
         if keywords:
             params["keywords"] = keywords
+        if normalized_bbox:
+            params["bbox"] = normalized_bbox
+        if lat is not None:
+            params["lat"] = lat
+        if lon is not None:
+            params["lon"] = lon
+        if radius is not None:
+            params["radius"] = radius
 
         url = f"{self.BASE_URL}/packages"
         LOGGER.debug("ESS-DIVE search request url=%s params=%s", url, params)
@@ -490,18 +596,13 @@ class ESSDiveClient:
             await client.get_dataset("ess-dive-9ea5fe57db73c90-20241024T093714082510")
             await client.get_dataset("doi:10.15485/2453885")
         """
-        # URL encode the identifier to handle special characters
-        encoded_identifier = quote(identifier, safe="")
-        url = f"{self.BASE_URL}/packages/{encoded_identifier}"
+        url = self._package_url(identifier)
         LOGGER.debug("ESS-DIVE get dataset request url=%s", url)
 
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-            response = await client.get(url, headers=self._get_headers())
-            response.raise_for_status()
-            result = response.json()
-            LOGGER.debug("ESS-DIVE get dataset response id=%s",
-                         result.get("id"))
-            return result
+        result = await self._get_json(url)
+        LOGGER.debug("ESS-DIVE get dataset response id=%s",
+                     result.get("id"))
+        return result
 
     async def get_dataset_status(self, identifier: str) -> Dict[str, Any]:
         """
@@ -516,17 +617,13 @@ class ESSDiveClient:
         Examples:
             await client.get_dataset_status("ess-dive-9ea5fe57db73c90-20241024T093714082510")
         """
-        encoded_identifier = quote(identifier, safe="")
-        url = f"{self.BASE_URL}/packages/{encoded_identifier}/status"
+        url = self._package_url(identifier, "/status")
         LOGGER.debug("ESS-DIVE get dataset status request url=%s", url)
 
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-            response = await client.get(url, headers=self._get_headers())
-            response.raise_for_status()
-            result = response.json()
-            LOGGER.debug(
-                "ESS-DIVE get dataset status response keys=%s", list(result.keys()))
-            return result
+        result = await self._get_json(url)
+        LOGGER.debug(
+            "ESS-DIVE get dataset status response keys=%s", list(result.keys()))
+        return result
 
     async def get_dataset_permissions(self, identifier: str) -> Dict[str, Any]:
         """
@@ -541,17 +638,13 @@ class ESSDiveClient:
         Examples:
             await client.get_dataset_permissions("ess-dive-9ea5fe57db73c90-20241024T093714082510")
         """
-        encoded_identifier = quote(identifier, safe="")
-        url = f"{self.BASE_URL}/packages/{encoded_identifier}/share"
+        url = self._package_url(identifier, "/share")
         LOGGER.debug("ESS-DIVE get dataset permissions request url=%s", url)
 
-        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
-            response = await client.get(url, headers=self._get_headers())
-            response.raise_for_status()
-            result = response.json()
-            LOGGER.debug(
-                "ESS-DIVE get dataset permissions response keys=%s", list(result.keys()))
-            return result
+        result = await self._get_json(url)
+        LOGGER.debug(
+            "ESS-DIVE get dataset permissions response keys=%s", list(result.keys()))
+        return result
 
     def format_results(
         self, results: Dict[str, Any], format_type: str = "summary"
@@ -680,19 +773,12 @@ def doi_to_essdive_id(doi: str, api_token: Optional[str] = None) -> str:
     client = ESSDiveClient(api_token=api_token)
 
     try:
-        # Use asyncio to run the async function
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(
-                client.get_dataset(normalized_doi))
-            essdive_id = result.get("id")
-            if not essdive_id:
-                raise ValueError(
-                    f"No dataset ID found in response for DOI: {doi}")
-            return essdive_id
-        finally:
-            loop.close()
+        result = _run_in_new_event_loop(client.get_dataset(normalized_doi))
+        essdive_id = result.get("id")
+        if not essdive_id:
+            raise ValueError(
+                f"No dataset ID found in response for DOI: {doi}")
+        return essdive_id
     except Exception as e:
         raise ValueError(
             f"Failed to convert DOI {doi} to ESS-DIVE ID: {str(e)}") from e
@@ -719,21 +805,15 @@ def essdive_id_to_doi(essdive_id: str, api_token: Optional[str] = None) -> str:
     LOGGER.debug("Converting ESS-DIVE ID to DOI essdive_id=%s", essdive_id)
 
     try:
-        # Use asyncio to run the async function
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(client.get_dataset(essdive_id))
-            dataset_meta = result.get("dataset", {})
-            # ESS-DIVE currently returns DOI in dataset["@id"]; keep "doi" as fallback.
-            doi = dataset_meta.get("@id") or dataset_meta.get("doi")
-            if not doi:
-                raise ValueError(
-                    f"No DOI found in metadata for ESS-DIVE ID: {essdive_id}")
-            # Normalize the DOI
-            return _normalize_doi(doi)
-        finally:
-            loop.close()
+        result = _run_in_new_event_loop(client.get_dataset(essdive_id))
+        dataset_meta = result.get("dataset", {})
+        # ESS-DIVE currently returns DOI in dataset["@id"]; keep "doi" as fallback.
+        doi = dataset_meta.get("@id") or dataset_meta.get("doi")
+        if not doi:
+            raise ValueError(
+                f"No DOI found in metadata for ESS-DIVE ID: {essdive_id}")
+        # Normalize the DOI
+        return _normalize_doi(doi)
     except Exception as e:
         raise ValueError(
             f"Failed to convert ESS-DIVE ID {essdive_id} to DOI: {str(e)}") from e
@@ -980,7 +1060,13 @@ def main():
         creator: Optional[str] = None,
         provider_name: Optional[str] = None,
         date_published: Optional[str] = None,
+        begin_date: Optional[str] = None,
+        end_date: Optional[str] = None,
         keywords: Optional[Union[str, List[str]]] = None,
+        bbox: Optional[Union[str, List[float]]] = None,
+        lat: Optional[float] = None,
+        lon: Optional[float] = None,
+        radius: Optional[float] = None,
         row_start: int = 1,
         page_size: int = 25,
         format: str = "summary",
@@ -993,7 +1079,13 @@ def main():
             creator: Filter by dataset creator
             provider_name: Filter by dataset project/provider
             date_published: Filter by publication date (e.g., "[2016 TO 2023]")
+            begin_date: Temporal coverage window start date (YYYY, YYYY-MM, or YYYY-MM-DD)
+            end_date: Temporal coverage window end date (YYYY, YYYY-MM, or YYYY-MM-DD)
             keywords: Search for datasets with specific keywords (string or list of strings)
+            bbox: Bounding box search as "min_lat,min_lon,max_lat,max_lon" or [min_lat, min_lon, max_lat, max_lon]
+            lat: Latitude for point-based nearby search
+            lon: Longitude for point-based nearby search
+            radius: Search radius in meters for point-based nearby search
             row_start: The row number to start on (for pagination)
             page_size: Number of results per page
             format: Format of the results (summary, detailed, raw)
@@ -1001,15 +1093,24 @@ def main():
         Examples:
             search-datasets with query="soil carbon" and page_size=10
             search-datasets with creator="Smith" and provider_name="NGEE Arctic"
+            search-datasets with begin_date="2020" and end_date="2021-06" and format="detailed"
+            search-datasets with bbox=[34.0, -119.0, 35.0, -117.0]
+            search-datasets with lat=37.7749 and lon=-122.4194 and radius=5000
 
         Returns:
             Formatted search results
         """
         LOGGER.debug(
-            "Tool search-datasets called query=%r creator=%r provider_name=%r row_start=%s page_size=%s format=%s",
+            "Tool search-datasets called query=%r creator=%r provider_name=%r begin_date=%r end_date=%r bbox=%r lat=%r lon=%r radius=%r row_start=%s page_size=%s format=%s",
             query,
             creator,
             provider_name,
+            begin_date,
+            end_date,
+            bbox,
+            lat,
+            lon,
+            radius,
             row_start,
             page_size,
             format,
@@ -1036,7 +1137,13 @@ def main():
                 provider_name=provider_name,
                 text=text,
                 date_published=date_published,
+                begin_date=begin_date,
+                end_date=end_date,
                 keywords=keywords_list,
+                bbox=bbox,
+                lat=lat,
+                lon=lon,
+                radius=radius,
             )
 
             # Format the results
@@ -1060,6 +1167,12 @@ def main():
                         "creator": creator,
                         "provider_name": provider_name,
                         "date_published": date_published,
+                        "begin_date": begin_date,
+                        "end_date": end_date,
+                        "bbox": bbox,
+                        "lat": lat,
+                        "lon": lon,
+                        "radius": radius,
                         "row_start": row_start,
                         "page_size": page_size,
                         "format": format,
@@ -1280,12 +1393,10 @@ def main():
                     }
                 )
 
-            geojson_obj: Dict[str, Any]
-            if features:
-                geojson_obj = {"type": "FeatureCollection",
-                               "features": features}
-            else:
-                geojson_obj = _geojson_for_bbox(derived_bbox)
+            geojson_obj: Dict[str, Any] = {
+                "type": "FeatureCollection",
+                "features": features,
+            }
 
             response: Dict[str, Any] = {
                 "geojson": geojson_obj,

@@ -36,6 +36,12 @@ def essdive_dataset_examples(api_examples: dict[str, Any]) -> list[dict[str, str
 
 
 @pytest.fixture(scope="session")
+def essdive_search_examples(api_examples: dict[str, Any]) -> list[dict[str, Any]]:
+    """Return ESS-DIVE search query examples from fixture file."""
+    return api_examples["essdive"]["search_queries"]
+
+
+@pytest.fixture(scope="session")
 def essdeepdive_search_examples(api_examples: dict[str, Any]) -> list[dict[str, Any]]:
     """Return ESS-DeepDive search query examples from fixture file."""
     return api_examples["essdeepdive"]["search_queries"]

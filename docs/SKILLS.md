@@ -1,6 +1,8 @@
 # ESS-DIVE Skills
 
-This directory contains optional Agent Skills for clients that support the Skills convention, including Claude Code and Codex.
+This guide describes the optional Agent Skills bundled with this repository.
+
+You do not need Skills for basic natural-language queries. Start without them if you are new to MCP, then add Skills if you want more predictable agent behavior for repeated ESS-DIVE tasks.
 
 ## What A Skill Is
 
@@ -23,8 +25,6 @@ The MCP server provides the tools. A Skill helps the agent decide how and when t
 
 ## When You Need Skills
 
-You do not need Skills for basic natural-language queries. Start without them if you are new to MCP.
-
 Use a Skill when you want:
 
 - more consistent agent behavior on repeated ESS-DIVE tasks
@@ -42,19 +42,19 @@ Skills may be used:
 
 Search ESS-DIVE datasets with keyword, temporal, and geographic filters; fetch metadata and permissions; and parse FLMD CSV content.
 
-See [`essdive-datasets/SKILL.md`](/home/harry/essdive-mcp/.agents/skills/essdive-datasets/SKILL.md).
+See [`../.agents/skills/essdive-datasets/SKILL.md`](../.agents/skills/essdive-datasets/SKILL.md).
 
 ### `essdive-identifiers`
 
 Convert between ESS-DIVE dataset IDs and DOIs.
 
-See [`essdive-identifiers/SKILL.md`](/home/harry/essdive-mcp/.agents/skills/essdive-identifiers/SKILL.md).
+See [`../.agents/skills/essdive-identifiers/SKILL.md`](../.agents/skills/essdive-identifiers/SKILL.md).
 
 ### `essdeepdive`
 
 Query the ESS-DeepDive fusion database for fields and file metadata.
 
-See [`essdeepdive/SKILL.md`](/home/harry/essdive-mcp/.agents/skills/essdeepdive/SKILL.md).
+See [`../.agents/skills/essdeepdive/SKILL.md`](../.agents/skills/essdeepdive/SKILL.md).
 
 ### Shared mapping helper
 

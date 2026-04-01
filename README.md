@@ -272,7 +272,7 @@ Based on the Agent Skills conventions described in the March 12, 2026 AI4Curatio
 - Skills can reference MCP tools, but they do not replace them
 - agents may use Skills explicitly or implicitly
 
-This repository includes three Skills under [`.agents/skills/README.md`](/home/harry/essdive-mcp/.agents/skills/README.md):
+This repository includes three Skills described in [docs/SKILLS.md](docs/SKILLS.md):
 
 - `essdive-datasets`
 - `essdive-identifiers`
@@ -389,7 +389,7 @@ The variable name must be exactly `ESSDIVE_API_TOKEN`.
 
 ### I am at LBNL and want to use CBORG-backed models
 
-That is optional and not required for this project. See [CBORG_SETUP.md](/home/harry/essdive-mcp/CBORG_SETUP.md).
+That is optional and not required for this project. See [docs/CBORG_SETUP.md](docs/CBORG_SETUP.md).
 
 ## License
 

@@ -24,6 +24,10 @@ MCP Tools Available:
   - parse-flmd-file: Parse File Level Metadata (FLMD) CSV files to extract filename and
     description mappings for dataset files.
 
+**Project References:**
+  - lookup-project-portal: Look up ESS-DIVE-related project names, acronyms, descriptions,
+    and portal URLs from a shared local reference file.
+
 **ESS-DeepDive Search & Analysis:**
   - search-ess-deepdive: Search the ESS-DeepDive fusion database for data fields by name,
     definition, value (text/numeric/date), and record count. Supports multi-page results.
@@ -46,10 +50,13 @@ import csv
 import re
 import logging
 import traceback
+from functools import lru_cache
+from pathlib import Path
 import requests
 from io import StringIO
 from typing import Dict, List, Optional, Any, Union, Awaitable, TypeVar
 import httpx
+import yaml
 from urllib.parse import quote
 from urllib.parse import quote as url_quote
 
@@ -59,6 +66,13 @@ from fastmcp import FastMCP
 LOGGER = logging.getLogger("essdive_mcp")
 REQUEST_TIMEOUT_SECONDS = 30.0
 T = TypeVar("T")
+PROJECT_PORTALS_PATH = (
+    Path(__file__).resolve().parents[2]
+    / ".agents"
+    / "skills"
+    / "references"
+    / "essdive_project_portals.yaml"
+)
 
 
 def _is_truthy(value: Optional[str]) -> bool:
@@ -286,6 +300,113 @@ def _format_dataset_search_bbox(
         raise ValueError(
             "bbox values must be numeric and ordered as min_lat,min_lon,max_lat,max_lon."
         ) from exc
+
+
+def _normalize_lookup_text(value: str) -> str:
+    """Normalize project lookup text for case-insensitive matching."""
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+@lru_cache(maxsize=1)
+def _load_project_portals() -> List[Dict[str, Any]]:
+    """Load portal metadata shared by the MCP server and Skills."""
+    if not PROJECT_PORTALS_PATH.exists():
+        raise FileNotFoundError(
+            f"Project portal reference file not found: {PROJECT_PORTALS_PATH}"
+        )
+
+    with PROJECT_PORTALS_PATH.open("r", encoding="utf-8") as handle:
+        payload = yaml.safe_load(handle) or {}
+
+    projects = payload.get("projects")
+    if not isinstance(projects, list):
+        raise ValueError(
+            f"Expected 'projects' list in {PROJECT_PORTALS_PATH}, found {type(projects).__name__}."
+        )
+
+    normalized_projects: List[Dict[str, Any]] = []
+    for item in projects:
+        if not isinstance(item, dict):
+            continue
+
+        aliases = item.get("aliases") or []
+        if not isinstance(aliases, list):
+            aliases = [str(aliases)]
+
+        normalized_projects.append(
+            {
+                "name": item.get("name"),
+                "acronym": item.get("acronym"),
+                "aliases": [str(alias) for alias in aliases if alias],
+                "short_description": item.get("short_description"),
+                "portal_url": item.get("portal_url"),
+                "url": item.get("url") or item.get("portal_url"),
+            }
+        )
+
+    return normalized_projects
+
+
+def search_project_portals(
+    query: Optional[str] = None,
+    limit: int = 10,
+) -> Dict[str, Any]:
+    """Search the shared project portal reference list by acronym, name, or alias."""
+    if limit <= 0:
+        raise ValueError("limit must be greater than 0.")
+
+    projects = _load_project_portals()
+    if not query:
+        return {
+            "query": None,
+            "count": len(projects),
+            "results": projects[:limit],
+            "source_file": str(PROJECT_PORTALS_PATH),
+        }
+
+    normalized_query = _normalize_lookup_text(query)
+    if not normalized_query:
+        raise ValueError("query must contain at least one letter or number.")
+
+    scored_results: List[tuple[int, Dict[str, Any]]] = []
+    for project in projects:
+        name = str(project.get("name") or "")
+        acronym = str(project.get("acronym") or "")
+        description = str(project.get("short_description") or "")
+        aliases = [str(alias) for alias in project.get("aliases") or []]
+
+        score = 0
+        candidates = [name, acronym, description, *aliases]
+        normalized_candidates = [_normalize_lookup_text(value)
+                                 for value in candidates if value]
+
+        if acronym and normalized_query == _normalize_lookup_text(acronym):
+            score = max(score, 120)
+        if name and normalized_query == _normalize_lookup_text(name):
+            score = max(score, 110)
+        if any(normalized_query == _normalize_lookup_text(alias) for alias in aliases):
+            score = max(score, 105)
+        if acronym and normalized_query in _normalize_lookup_text(acronym):
+            score = max(score, 95)
+        if name and normalized_query in _normalize_lookup_text(name):
+            score = max(score, 90)
+        if any(normalized_query in _normalize_lookup_text(alias) for alias in aliases):
+            score = max(score, 85)
+        if any(normalized_query in candidate for candidate in normalized_candidates):
+            score = max(score, 70)
+
+        if score > 0:
+            scored_results.append((score, project))
+
+    scored_results.sort(
+        key=lambda item: (-item[0], str(item[1].get("name") or "")))
+    results = [item[1] for item in scored_results[:limit]]
+    return {
+        "query": query,
+        "count": len(results),
+        "results": results,
+        "source_file": str(PROJECT_PORTALS_PATH),
+    }
 
 
 def _validate_dataset_search_spatial_params(
@@ -1411,6 +1532,41 @@ def main():
                 exc,
                 verbose=verbose_mode,
                 context={"id": id},
+            )
+
+    @server.tool(
+        name="lookup-project-portal",
+        description="Look up ESS-DIVE-related project names, acronyms, descriptions, and portal URLs",
+    )
+    def lookup_project_portal_tool(query: Optional[str] = None, limit: int = 10) -> str:
+        """
+        Look up project background information from the shared ESS-DIVE portal reference list.
+
+        This is useful when users mention an acronym or project name, such as CHESS,
+        and the agent needs a quick expansion plus a URL for more context.
+
+        Args:
+            query: Optional project acronym, name, or alias to search for
+            limit: Maximum number of matches to return
+
+        Examples:
+            lookup-project-portal with query="CHESS"
+            lookup-project-portal with query="COMPASS-FME"
+            lookup-project-portal with query="East River"
+
+        Returns:
+            JSON string containing matching project reference entries
+        """
+        LOGGER.debug("Tool lookup-project-portal called query=%r limit=%s", query, limit)
+        try:
+            result = search_project_portals(query=query, limit=limit)
+            return json.dumps(result, indent=2)
+        except Exception as exc:
+            return _tool_error_response(
+                "lookup-project-portal",
+                exc,
+                verbose=verbose_mode,
+                context=_context_without_none({"query": query, "limit": limit}),
             )
 
     @server.tool(

@@ -15,6 +15,7 @@ In this repository, the Skills help an agent:
 - search ESS-DIVE datasets
 - convert between DOIs and ESS-DIVE IDs
 - query ESS-DeepDive field and file metadata
+- resolve ESS-DIVE project acronyms and portal URLs from a shared local reference file
 
 A Skill is not:
 
@@ -50,6 +51,8 @@ Without the MCP server:
 - the Skills still provide reusable instructions, examples, and task framing
 - some Skill docs include fallback direct API examples
 - behavior depends more on your client's native tools and capabilities
+
+The shared project reference file lives at [`../.agents/skills/references/essdive_project_portals.yaml`](../.agents/skills/references/essdive_project_portals.yaml).
 
 ## Available Skills
 

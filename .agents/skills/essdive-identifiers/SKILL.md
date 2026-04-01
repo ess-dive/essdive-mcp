@@ -36,6 +36,7 @@ claude mcp add --transport stdio essdive-mcp -- uv run python ./src/essdive_mcp/
 
 - `doi-to-essdive-id`
 - `essdive-id-to-doi`
+- `lookup-project-portal`
 - `coords-to-map-links`
 
 ## Usage examples
@@ -52,6 +53,12 @@ Convert an ESS-DIVE ID to a DOI:
 essdive-id-to-doi with essdive_id="ess-dive-9ea5fe57db73c90-20241024T093714082510"
 ```
 
+Look up a project acronym and its portal details:
+
+```
+lookup-project-portal with query="CHESS"
+```
+
 Create map links for a point (geojson.io + Google Maps + Google Earth KML):
 
 ```
@@ -62,6 +69,7 @@ coords-to-map-links with points=[[38.9219, -106.9490]] and zoom=12
 
 - DOI inputs can include prefixes or URLs (e.g., `doi:10.15485/...` or `https://doi.org/...`).
 - Outputs return a normalized DOI format.
+- For portal names, acronyms, and URLs, consult `../references/essdive_project_portals.yaml`.
 
 ## Fallback (no MCP server)
 

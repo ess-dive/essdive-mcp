@@ -15,6 +15,8 @@ from essdive_mcp.main import (
     get_ess_deepdive_dataset,
     get_ess_deepdive_file,
     _summarize_essdeepdive_file_response,
+    _load_project_portals,
+    search_project_portals,
 )
 import pytest
 import os
@@ -101,6 +103,43 @@ class TestToolErrorPayload:
         assert payload["error"]["type"] == "RuntimeError"
         assert "traceback" in payload["error"]
         assert "RuntimeError: boom" in payload["error"]["traceback"]
+
+
+class TestProjectPortalReferences:
+    """Tests for shared ESS-DIVE project portal references."""
+
+    def test_load_project_portals(self):
+        """Project portal YAML should load a non-empty project list."""
+        portals = _load_project_portals()
+
+        assert isinstance(portals, list)
+        assert len(portals) >= 5
+        assert any(item["acronym"] == "CHESS" for item in portals)
+
+    def test_search_project_portals_exact_acronym(self):
+        """Exact acronym lookup should find the matching portal."""
+        result = search_project_portals("CHESS", limit=5)
+
+        assert result["count"] >= 1
+        first = result["results"][0]
+        assert first["acronym"] == "CHESS"
+        assert "Colorado Headwaters Ecological Spectroscopy Study" in first["name"]
+        assert "ecosis.org" in first["url"]
+
+    def test_search_project_portals_alias(self):
+        """Alias lookup should resolve portal entries."""
+        result = search_project_portals("East River", limit=5)
+
+        assert result["count"] >= 1
+        assert any("East River" in item["name"] or "East River" in " ".join(item["aliases"]) for item in result["results"])
+
+    def test_search_project_portals_without_query_lists_entries(self):
+        """Listing without a query should return a bounded set of entries."""
+        result = search_project_portals(limit=3)
+
+        assert result["query"] is None
+        assert result["count"] >= 3
+        assert len(result["results"]) == 3
 
 
 class TestSanitizeTsvField:

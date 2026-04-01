@@ -4,6 +4,8 @@ This guide describes the optional Agent Skills bundled with this repository.
 
 You do not need Skills for basic natural-language queries. Start without them if you are new to MCP, then add Skills if you want more predictable agent behavior for repeated ESS-DIVE tasks.
 
+You also do not need this repository's MCP server in order to use the Skills themselves. The Skills can still be installed as reusable instruction documents, but without the MCP server they will rely on whatever built-in tools or fallback HTTP/API approaches your client supports.
+
 ## What A Skill Is
 
 A Skill is a reusable instruction document that helps an AI agent handle a recurring task pattern.
@@ -35,6 +37,19 @@ Skills may be used:
 
 - explicitly, by naming the Skill in your prompt
 - implicitly, when the agent recognizes that a Skill matches your request
+
+## Skills With And Without MCP
+
+With the MCP server:
+
+- the agent can call the ESS-DIVE and ESS-DeepDive tools exposed by `essdive-mcp`
+- the Skills can guide the agent toward those tools directly
+
+Without the MCP server:
+
+- the Skills still provide reusable instructions, examples, and task framing
+- some Skill docs include fallback direct API examples
+- behavior depends more on your client's native tools and capabilities
 
 ## Available Skills
 

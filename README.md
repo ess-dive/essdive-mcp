@@ -2,6 +2,8 @@
 
 An MCP (Model Context Protocol) server for querying ESS-DIVE datasets and the ESS-DeepDive fusion database from chat-based AI clients such as Claude Code, Codex, VS Code with Copilot Chat, and Goose.
 
+Those are examples, not the full list. If your client can connect to local stdio MCP servers, you can usually configure `essdive-mcp` there as well.
+
 ## What This Project Is
 
 This project gives an AI client a set of tools for:
@@ -33,26 +35,110 @@ The simplest mental model is:
 
 ### 1. Install prerequisites
 
-You will need:
+The easiest way to check your setup is:
 
-- `git`
+```bash
+./scripts/check_prereqs.sh
+```
+
+If your shell reports `Permission denied`, run the same script with `bash`, for example:
+
+```bash
+bash scripts/check_prereqs.sh
+```
+
+What each prerequisite is for:
+
 - Python 3.10 or newer
-- [`uv`](https://docs.astral.sh/uv/) for running the project
-- one MCP-capable client:
+  Python runs the `essdive-mcp` server itself.
+- [`uv`](https://docs.astral.sh/uv/)
+  `uv` installs the project dependencies and runs the server.
+- `git`
+  `git` is only needed if you want to clone the repository from the command line. If you prefer, you can download the repository as a ZIP file from GitHub instead.
+- one MCP-capable client if you want to use the MCP server directly:
   - Claude Code
   - Codex
   - VS Code with GitHub Copilot Chat in Agent mode
   - Goose
 
-### 2. Clone the repository and install dependencies
+Other MCP-capable clients may also work. The clients listed here are just the ones this README documents explicitly.
+
+How to check them manually:
+
+- Check Python:
+
+```bash
+python3 --version
+```
+
+If that does not work, try:
+
+```bash
+python --version
+```
+
+You need Python `3.10` or newer. If you do not have it, install it from <https://www.python.org/downloads/>.
+
+- Check `uv`:
+
+```bash
+uv --version
+```
+
+If you do not have `uv`, install it using the official Astral instructions:
+
+macOS/Linux:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
+- Check `git`:
+
+```bash
+git --version
+```
+
+If you do not have `git`, you can still continue by downloading this repository as a ZIP file from GitHub and extracting it locally.
+
+### 2. Download the repository
+
+Option A: clone it with `git`:
 
 ```bash
 git clone https://github.com/ess-dive/essdive-mcp.git
 cd essdive-mcp
+```
+
+Option B: on the GitHub repository page, use `Code` -> `Download ZIP`, then extract the ZIP and open the extracted `essdive-mcp` folder in your terminal or editor.
+
+### 3. Install the project locally
+
+The easiest way is:
+
+```bash
+./scripts/setup_local.sh
+```
+
+This script:
+
+- checks your required prerequisites
+- runs `uv sync`
+- tells you the next steps
+
+If you prefer the manual command:
+
+```bash
 uv sync
 ```
 
-### 3. Get an ESS-DIVE authentication token
+### 4. Get an ESS-DIVE authentication token
 
 ESS-DIVE documents the token workflow in its Dataset API docs.
 
@@ -62,10 +148,10 @@ ESS-DIVE documents the token workflow in its Dataset API docs.
 4. Go to `Settings` -> `Authentication Token`
 5. Copy the token
 
-Save it to a local file so you do not have to paste it into shell history:
+The easiest way to save it locally is:
 
 ```bash
-printf '%s\n' 'YOUR_ESS_DIVE_TOKEN_HERE' > essdivetoken
+./scripts/save_token.sh
 ```
 
 Important:
@@ -74,9 +160,23 @@ Important:
 - The environment variable name is `ESSDIVE_API_TOKEN`.
 - You can authenticate with `--token`, `--token-file`, or `ESSDIVE_API_TOKEN`.
 
-### 4. Sanity-check the server locally
+If you prefer the manual command, you can still save the token to `essdivetoken` yourself.
 
-Run:
+### 5. Sanity-check the server locally
+
+The easiest way is:
+
+```bash
+./scripts/start_server.sh
+```
+
+This script:
+
+- checks that `uv` is available
+- checks that your token file exists
+- starts the MCP server with that token file
+
+If you prefer the manual command:
 
 ```bash
 uv run essdive-mcp --token-file ./essdivetoken
@@ -93,6 +193,12 @@ This server communicates over standard input/output, so it does not print an int
 ## Connect From One Client
 
 Choose one of the following. These are alternatives, not sequential steps.
+
+If your preferred client is not listed here, look for that client's MCP server settings and configure it to run:
+
+```bash
+uv run essdive-mcp --token-file ./essdivetoken
+```
 
 ### VS Code with GitHub Copilot Chat
 
@@ -271,6 +377,8 @@ Based on the Agent Skills conventions described in the March 12, 2026 AI4Curatio
 - a Skill is not the same thing as an MCP server
 - Skills can reference MCP tools, but they do not replace them
 - agents may use Skills explicitly or implicitly
+
+You can also use the Skills without installing this MCP server. In that case, they still provide task-specific instructions and prompt patterns, and some of them include fallback API examples. You just will not get the full MCP tool integration.
 
 This repository includes three Skills described in [docs/SKILLS.md](docs/SKILLS.md):
 

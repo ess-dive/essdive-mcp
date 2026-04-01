@@ -16,33 +16,33 @@
     ],
     "search_queries": [
       {
-        "name": "temporal_tropiroot",
-        "query": "TropiRoot",
-        "begin_date": "1986-01-01",
-        "end_date": "2019-01-01",
+        "name": "temporal_bionte",
+        "query": "BIONTE",
+        "begin_date": "2022",
+        "end_date": "2023",
         "page_size": 10,
-        "expected_id": "ess-dive-3e3ca22cd60ddff-20251202T181349898"
+        "expected_id": "ess-dive-a50d0132afc030e-20250905T160628783"
       },
       {
-        "name": "bbox_bionte",
-        "query": "BIONTE",
+        "name": "bbox_tempest",
+        "query": "TEMPEST",
         "bbox": [
-          -2.75,
-          -60.25,
-          -2.5,
-          -60.083
+          38.8740,
+          -76.5521,
+          38.8748,
+          -76.5515
         ],
         "page_size": 10,
-        "expected_id": "ess-dive-a50d0132afc030e-20250905T160628783"
+        "expected_id": "ess-dive-f002e3e8be8a266-20260401T000217538"
       },
       {
-        "name": "point_bionte",
-        "query": "BIONTE",
-        "lat": -2.625,
-        "lon": -60.1665,
-        "radius": 50000,
+        "name": "point_tempest",
+        "query": "TEMPEST",
+        "lat": 38.8747,
+        "lon": -76.5519,
+        "radius": 100,
         "page_size": 10,
-        "expected_id": "ess-dive-a50d0132afc030e-20250905T160628783"
+        "expected_id": "ess-dive-f002e3e8be8a266-20260401T000217538"
       }
     ]
   },

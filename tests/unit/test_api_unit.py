@@ -19,6 +19,7 @@ from essdive_mcp.main import (
 import pytest
 import os
 import requests
+import httpx
 from unittest.mock import Mock, patch, AsyncMock
 
 
@@ -373,6 +374,50 @@ class TestESSDiveClient:
             assert params["lat"] == 37.7749
             assert params["lon"] == -122.4194
             assert params["radius"] == 5000
+
+    @pytest.mark.asyncio
+    async def test_search_datasets_treats_no_matches_404_as_empty_results(self):
+        """ESS-DIVE returns 404 for no-match searches; this should not raise."""
+        client = ESSDiveClient(api_token="test_token")
+
+        request = httpx.Request("GET", "https://api.ess-dive.lbl.gov/packages")
+        response = httpx.Response(
+            404,
+            request=request,
+            json={"detail": "No datasets were found."},
+        )
+        mock_response_obj = Mock()
+        mock_response_obj.status_code = 404
+        mock_response_obj.json.return_value = {"detail": "No datasets were found."}
+        mock_response_obj.raise_for_status.side_effect = httpx.HTTPStatusError(
+            "404 not found",
+            request=request,
+            response=response,
+        )
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            result = await client.search_datasets(
+                lat=37.7749,
+                lon=-122.4194,
+                radius=5000,
+                is_public=True,
+                page_size=3,
+            )
+
+            assert result["total"] == 0
+            assert result["result"] == []
+            assert result["pageSize"] == 3
+            assert result["query"]["lat"] == 37.7749
+            assert result["query"]["lon"] == -122.4194
+            assert result["query"]["radius"] == 5000
+            assert result["query"]["isPublic"] is True
 
     @pytest.mark.asyncio
     async def test_search_datasets_requires_complete_point_search_params(self):

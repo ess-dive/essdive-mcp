@@ -215,6 +215,7 @@ Try prompts like:
 
 - `Find public ESS-DIVE datasets about soil carbon and summarize the top five results.`
 - `Search ESS-DIVE for datasets inside the bounding box [38.9187, -106.9532, 38.9263, -106.9451].`
+- `Search ESS-DIVE for datasets within 100 meters of 38.8747, -76.5519 and summarize the results.`
 - `Find ESS-DIVE datasets published in 2024 about wildfire recovery.`
 - `Look for datasets with temporal coverage between 2020 and 2021 and show the dataset IDs.`
 
@@ -247,6 +248,7 @@ If your client supports direct tool calling, these examples map closely to the a
 search-datasets with query="wildfire recovery" and page_size=5
 search-datasets with begin_date="2020" and end_date="2021" and format="detailed"
 search-datasets with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
+search-datasets with lat=38.8747 and lon=-76.5519 and radius=100
 get-dataset with id="ess-dive-165671432ae620e-20250908T210722395"
 get-dataset-permissions with id="ess-dive-165671432ae620e-20250908T210722395"
 doi-to-essdive-id with doi="10.15485/2587853"

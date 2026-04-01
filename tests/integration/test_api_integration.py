@@ -102,6 +102,30 @@ async def test_search_datasets_live_temporal_and_geospatial_filters(
         assert str(example["expected_id"]) in returned_ids
 
 
+@pytest.mark.asyncio
+async def test_search_datasets_live_point_search_no_matches_returns_empty_result(
+    essdive_api_token: str,
+):
+    """A no-hit point search should return an empty result set, not raise."""
+    client = ESSDiveClient(api_token=essdive_api_token)
+
+    response = await client.search_datasets(
+        lat=37.7749,
+        lon=-122.4194,
+        radius=5000,
+        is_public=True,
+        page_size=3,
+    )
+
+    assert isinstance(response, dict)
+    assert response["total"] == 0
+    assert response["result"] == []
+    assert response["pageSize"] == 3
+    assert response["query"]["lat"] == 37.7749
+    assert response["query"]["lon"] == -122.4194
+    assert response["query"]["radius"] == 5000
+
+
 def test_doi_to_essdive_id_live(
     essdive_api_token: str,
     essdive_dataset_examples: list[dict[str, str]],

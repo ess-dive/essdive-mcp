@@ -197,6 +197,63 @@ def _context_without_none(context: Dict[str, Any]) -> Dict[str, Any]:
     return {key: value for key, value in context.items() if value is not None}
 
 
+def _is_essdive_empty_search_response(response: httpx.Response) -> bool:
+    """Return True when ESS-DIVE encodes an empty search result as HTTP 404."""
+    if response.status_code != 404:
+        return False
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return False
+
+    detail = payload.get("detail")
+    return (
+        isinstance(detail, str)
+        and detail.strip().lower() == "no datasets were found."
+    )
+
+
+def _empty_dataset_search_result(
+    *,
+    row_start: int,
+    page_size: int,
+    is_public: Optional[bool],
+    creator: Optional[str],
+    provider_name: Optional[str],
+    text: Optional[str],
+    date_published: Optional[str],
+    begin_date: Optional[str],
+    end_date: Optional[str],
+    keywords: Optional[List[str]],
+    bbox: Optional[str],
+    lat: Optional[float],
+    lon: Optional[float],
+    radius: Optional[float],
+) -> Dict[str, Any]:
+    """Return a stable empty search payload when the API reports no matches."""
+    return {
+        "total": 0,
+        "pageSize": page_size,
+        "rowStart": row_start,
+        "result": [],
+        "query": {
+            "isPublic": is_public,
+            "creator": creator,
+            "providerName": provider_name,
+            "text": text,
+            "datePublished": date_published,
+            "beginDate": begin_date,
+            "endDate": end_date,
+            "keywords": keywords,
+            "bbox": bbox,
+            "lat": lat,
+            "lon": lon,
+            "radius": radius,
+        },
+    }
+
+
 def _run_in_new_event_loop(awaitable: Awaitable[T]) -> T:
     """Run an awaitable in a dedicated event loop for sync helper functions."""
     loop = asyncio.new_event_loop()
@@ -572,7 +629,31 @@ class ESSDiveClient:
 
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
             response = await client.get(url, params=params, headers=self._get_headers())
-            response.raise_for_status()
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError:
+                if _is_essdive_empty_search_response(response):
+                    LOGGER.debug(
+                        "ESS-DIVE search returned 404 with no matching datasets; "
+                        "converting to an empty result set"
+                    )
+                    return _empty_dataset_search_result(
+                        row_start=row_start,
+                        page_size=page_size,
+                        is_public=is_public,
+                        creator=creator,
+                        provider_name=provider_name,
+                        text=text,
+                        date_published=date_published,
+                        begin_date=begin_date,
+                        end_date=end_date,
+                        keywords=keywords,
+                        bbox=normalized_bbox,
+                        lat=lat,
+                        lon=lon,
+                        radius=radius,
+                    )
+                raise
             result = response.json()
             LOGGER.debug(
                 "ESS-DIVE search response total=%s count=%s",

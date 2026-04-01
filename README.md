@@ -346,6 +346,81 @@ Try prompts like:
 - `Turn the point 38.9219, -106.9490 into map links I can open in geojson.io and Google Maps.`
 - `Create map links for the bounding box [38.9187, -106.9532, 38.9263, -106.9451].`
 
+## Example Results
+
+The exact results will change over time as ESS-DIVE and ESS-DeepDive are updated, but successful queries should look roughly like this.
+
+### Dataset search example
+
+Prompt:
+
+```text
+Search ESS-DIVE for datasets within 100 meters of 38.8747, -76.5519 and summarize the results.
+```
+
+Example result excerpt:
+
+```text
+Found 20 datasets. Showing 3 results:
+
+1. COMPASS-FME Terrestrial Ecosystem Manipulation to Probe the Effects of Storm Treatments (TEMPEST) Experiment Level 1 Sensor Data v2-1
+   ID: ess-dive-f002e3e8be8a266-20260401T000217538
+   Published: 2025
+   URL: https://data.ess-dive.lbl.gov/view/doi:10.15485/2588618
+
+2. COMPASS-FME Synoptic Sites Level 1 Sensor Data v2-1
+   ID: ess-dive-3aa5e31d62e9ee6-20260331T235820880
+   Published: 2025
+```
+
+### Identifier conversion example
+
+Prompt:
+
+```text
+Convert DOI 10.15485/2588618 to an ESS-DIVE dataset ID.
+```
+
+Example result:
+
+```text
+ess-dive-f002e3e8be8a266-20260401T000217538
+```
+
+The reverse conversion should return:
+
+```text
+doi:10.15485/2588618
+```
+
+### ESS-DeepDive field search example
+
+Prompt:
+
+```text
+Search ESS-DeepDive for temperature-related fields.
+```
+
+Example result excerpt:
+
+```json
+{
+  "field_name": "HG_Soil_Temperature_C",
+  "unit": "C",
+  "definition": "In situ soil temperature",
+  "data_type": "numeric",
+  "total_record_count": 36,
+  "missing_values_count": 10,
+  "values_summary": {
+    "min": 19.1,
+    "max": 26.9
+  },
+  "doi": "doi:10.15485/2587853",
+  "version": "ess-dive-165671432ae620e-20250908T210722395",
+  "data_file": "NExpt_ESSDIVE_Datafile.csv"
+}
+```
+
 ## Tool-Level Examples
 
 If your client supports direct tool calling, these examples map closely to the available tools.

@@ -38,6 +38,7 @@ claude mcp add --transport stdio essdive-mcp -- uv run python ./src/essdive_mcp/
 - `get-dataset`
 - `get-dataset-permissions`
 - `parse-flmd-file`
+- `lookup-project-portal`
 - `coords-to-map-links`
 
 ## Usage examples
@@ -70,6 +71,12 @@ Filter by nearby point search:
 
 ```
 search-datasets with lat=37.7749 and lon=-122.4194 and radius=5000
+```
+
+Look up a project acronym and its portal details:
+
+```
+lookup-project-portal with query="CHESS"
 ```
 
 Get detailed metadata for a dataset:
@@ -108,6 +115,7 @@ coords-to-map-links with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
 - `page_size` max is 100; `row_start` is 1-based.
 - `bbox` uses `[min_lat, min_lon, max_lat, max_lon]` ordering and can also be passed as a comma-delimited string.
 - Point search requires `lat`, `lon`, and `radius` together. Do not combine point search with `bbox`.
+- For portal names, acronyms, and URLs, consult `../references/essdive_project_portals.yaml`.
 
 ## Fallback (no MCP server)
 

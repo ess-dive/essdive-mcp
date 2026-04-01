@@ -30,6 +30,7 @@ This project gives an AI client a set of tools for:
 - converting between ESS-DIVE dataset IDs and DOIs
 - parsing File Level Metadata (FLMD) CSV content
 - searching ESS-DeepDive field and file metadata
+- looking up ESS-DIVE project acronyms, descriptions, and portal URLs
 - turning coordinates into map links
 
 ## If You Are New to MCP and Skills
@@ -410,6 +411,23 @@ The reverse conversion should return:
 doi:10.15485/2588618
 ```
 
+### Project reference example
+
+Prompt:
+
+```text
+What is CHESS, and where can I find more information about it?
+```
+
+Example result excerpt:
+
+```text
+CHESS stands for Colorado Headwaters Ecological Spectroscopy Study.
+It is a remote sensing and field research campaign organized by Rocky Mountain Biological Laboratory
+and Berkeley Lab's Watershed Function SFA.
+More information: https://ecosis.org/package/proximal-spectra-for-the-2025-colorado-headwaters-ecological-spectroscopy-study--chess-
+```
+
 ### ESS-DeepDive field search example
 
 Prompt:
@@ -573,6 +591,10 @@ and the observed values range from 19.1 to 26.9 C.
 
 - `doi-to-essdive-id`
 - `essdive-id-to-doi`
+
+### Project reference tool
+
+- `lookup-project-portal`
 
 ### ESS-DeepDive tools
 

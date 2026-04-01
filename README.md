@@ -481,7 +481,7 @@ Skills are optional. They are useful when you want an agent to consistently reco
 - DOI and ESS-DIVE ID conversion
 - ESS-DeepDive field and file exploration
 
-Based on the Agent Skills conventions described in the March 12, 2026 AI4Curation presentation:
+What is a Skill?
 
 - a Skill is a reusable instruction document, usually written in Markdown
 - a Skill is not the same thing as an MCP server

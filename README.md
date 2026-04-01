@@ -4,6 +4,23 @@ An MCP (Model Context Protocol) server for querying ESS-DIVE datasets and the ES
 
 Those are examples, not the full list. If your client can connect to local stdio MCP servers, you can usually configure `essdive-mcp` there as well.
 
+## Table of Contents
+
+- [What This Project Is](#what-this-project-is)
+- [If You Are New to MCP and Skills](#if-you-are-new-to-mcp-and-skills)
+- [Getting Started](#getting-started)
+- [Connect From One Client](#connect-from-one-client)
+- [First Queries to Try](#first-queries-to-try)
+- [Example Results](#example-results)
+- [Tool-Level Examples](#tool-level-examples)
+- [Agent Skills](#agent-skills)
+- [Available Tools](#available-tools)
+- [Command-Line Options](#command-line-options)
+- [Environment Variables](#environment-variables)
+- [Testing](#testing)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
+
 ## What This Project Is
 
 This project gives an AI client a set of tools for:
@@ -496,6 +513,52 @@ Examples:
 - `Use the essdive-datasets skill to find recent wildfire-related datasets and then fetch the metadata for the best match.`
 - `Use the essdive-identifiers skill to normalize DOI https://doi.org/10.15485/2587853 and return the ESS-DIVE ID.`
 - `Use the essdeepdive skill to search for temperature fields and tell me which data file each result comes from.`
+
+### Skill result examples
+
+Prompt:
+
+```text
+Use the essdive-identifiers skill to convert DOI 10.15485/2588618 to an ESS-DIVE dataset ID.
+```
+
+Example result:
+
+```text
+ess-dive-f002e3e8be8a266-20260401T000217538
+```
+
+Prompt:
+
+```text
+Use the essdive-datasets skill to search for datasets within 100 meters of 38.8747, -76.5519 and summarize the matches.
+```
+
+Example result excerpt:
+
+```text
+Found 20 datasets. Showing 3 results:
+
+1. COMPASS-FME Terrestrial Ecosystem Manipulation to Probe the Effects of Storm Treatments (TEMPEST) Experiment Level 1 Sensor Data v2-1
+   ID: ess-dive-f002e3e8be8a266-20260401T000217538
+
+2. COMPASS-FME Synoptic Sites Level 1 Sensor Data v2-1
+   ID: ess-dive-3aa5e31d62e9ee6-20260331T235820880
+```
+
+Prompt:
+
+```text
+Use the essdeepdive skill to find temperature fields in ESS-DeepDive and tell me which file they come from.
+```
+
+Example result excerpt:
+
+```text
+One matching field is HG_Soil_Temperature_C from DOI doi:10.15485/2587853.
+It is defined as in situ soil temperature, stored in NExpt_ESSDIVE_Datafile.csv,
+and the observed values range from 19.1 to 26.9 C.
+```
 
 ## Available Tools
 

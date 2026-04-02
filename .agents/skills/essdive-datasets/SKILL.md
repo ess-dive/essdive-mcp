@@ -88,6 +88,26 @@ search-datasets with provider_name="SPRUCE" and variable_measured=["temperature"
 search-datasets with funder="Department of Energy" and file_format="csv"
 ```
 
+Live-checked examples on April 2, 2026:
+
+```
+search-datasets with query="East River" and creator_affiliation="Lawrence Berkeley National Laboratory" and page_size=5
+```
+
+This narrowed the first page from 5 native results down to 3 local matches.
+
+```
+search-datasets with query="East River" and variable_measured="streamflow" and page_size=5
+```
+
+This narrowed the same first page down to 1 local match.
+
+```
+search-datasets with query="East River" and funder="NASA" and page_size=5
+```
+
+This also narrowed the same first page down to 1 local match.
+
 Look up a project acronym and its portal details:
 
 ```
@@ -133,6 +153,7 @@ coords-to-map-links with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
 - Native ESS-DIVE `/packages` filters include `query`/`text`, `creator`, `provider_name`, `date_published`, `begin_date`, `end_date`, `keywords`, `bbox`, and `lat`/`lon`/`radius`.
 - Additional filters such as `creator_affiliation`, `variable_measured`, `measurement_technique`, `funder`, `license`, `alternate_name`, `editor`, `file_format`, `file_name`, and `file_url` are applied locally after the initial API search using full dataset metadata from `get-dataset`.
 - If you need very precise filtering on those local-only fields, start with a narrower native search first, then apply the local metadata filters.
+- Local metadata filtering only inspects the current API page, so increase `page_size` or adjust `row_start` if you want to scan more native matches.
 - For portal names, acronyms, and URLs, consult `../references/essdive_project_portals.yaml`.
 
 ## Fallback (no MCP server)

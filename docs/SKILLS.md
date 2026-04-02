@@ -62,6 +62,21 @@ Search ESS-DIVE datasets with keyword, temporal, and geographic filters; fetch m
 
 See [`../.agents/skills/essdive-datasets/SKILL.md`](../.agents/skills/essdive-datasets/SKILL.md).
 
+This Skill also covers a two-step search pattern for dataset metadata fields that are not native `/packages` query params, such as `variableMeasured`, `measurementTechnique`, `funder`, `creator.affiliation`, and file-level distribution metadata.
+
+What that enables in practice:
+
+- start with a broad search like `East River`
+- then narrow the current result page by creator affiliation, measured variable, funder, license, or file metadata
+
+Verified live on April 2, 2026 with `page_size=5`:
+
+- `query="East River"` plus `creator_affiliation="Lawrence Berkeley National Laboratory"` narrowed the first page from 5 results down to 3
+- `query="East River"` plus `variable_measured="streamflow"` narrowed the same first page to 1 result
+- `query="East River"` plus `funder="NASA"` narrowed the same first page to 1 result
+
+Because this filtering happens after the initial API search, `page_size` and `row_start` affect what gets inspected locally.
+
 ### `essdive-identifiers`
 
 Convert between ESS-DIVE dataset IDs and DOIs.
@@ -111,6 +126,8 @@ To remove them:
 - `Use the essdive-datasets skill to find public ESS-DIVE datasets about wildfire recovery and summarize the top results.`
 - `Use the essdive-datasets skill to search for datasets inside the bounding box [38.9187, -106.9532, 38.9263, -106.9451] and summarize the matches.`
 - `Use the essdive-datasets skill to search for datasets within 100 meters of 38.8747, -76.5519 and summarize the matches.`
+- `Use the essdive-datasets skill to search for East River datasets and then keep only results with Lawrence Berkeley Lab creator affiliations.`
+- `Use the essdive-datasets skill to search for East River datasets and then keep only results where variableMeasured includes streamflow.`
 
 ### `essdive-identifiers`
 

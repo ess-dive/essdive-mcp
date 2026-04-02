@@ -17,6 +17,8 @@ from essdive_mcp.main import (
     _summarize_essdeepdive_file_response,
     _load_project_portals,
     search_project_portals,
+    _dataset_matches_local_filters,
+    _apply_local_dataset_filters,
 )
 import pytest
 import os
@@ -500,6 +502,108 @@ class TestESSDiveClient:
                 radius=5000,
             )
 
+    def test_dataset_matches_local_filters(self):
+        """Local metadata filters should match nested dataset metadata fields."""
+        dataset = {
+            "creator": [
+                {
+                    "givenName": "Jane",
+                    "familyName": "Doe",
+                    "affiliation": "Pennsylvania State University",
+                }
+            ],
+            "variableMeasured": ["snow water equivalent", "soil moisture"],
+            "measurementTechnique": ["Automated snow-depth sensor and field surveys"],
+            "funder": [{"name": "U.S. Department of Energy"}],
+            "license": "https://creativecommons.org/licenses/by/4.0/",
+            "alternateName": ["doi:10.15485/example"],
+            "editor": {
+                "givenName": "Alex",
+                "familyName": "Smith",
+                "email": "alex@example.org",
+            },
+            "distribution": [
+                {
+                    "name": "snow.csv",
+                    "encodingFormat": "text/csv",
+                    "contentUrl": "https://example.org/snow.csv",
+                }
+            ],
+        }
+
+        assert _dataset_matches_local_filters(
+            dataset,
+            {
+                "creator_affiliation": ["Pennsylvania"],
+                "variable_measured": ["snow water"],
+                "measurement_technique": ["sensor"],
+                "funder": ["department of energy"],
+                "license": ["creativecommons"],
+                "alternate_name": ["10.15485"],
+                "editor": ["alex@example.org"],
+                "file_format": ["csv"],
+                "file_name": ["snow.csv"],
+                "file_url": ["example.org"],
+            },
+        )
+
+        assert not _dataset_matches_local_filters(
+            dataset,
+            {"variable_measured": ["streamflow"]},
+        )
+
+    @pytest.mark.asyncio
+    async def test_apply_local_dataset_filters_hydrates_results(self):
+        """Metadata-only filters should hydrate search results with get-dataset."""
+        client = ESSDiveClient(api_token="test_token")
+        client.get_dataset = AsyncMock(
+            return_value={
+                "id": "ds1",
+                "dataset": {
+                    "name": "Snow dataset",
+                    "variableMeasured": ["snow water equivalent"],
+                    "creator": [
+                        {
+                            "givenName": "Jane",
+                            "familyName": "Doe",
+                            "affiliation": "Pennsylvania State University",
+                        }
+                    ],
+                },
+            }
+        )
+
+        results = {
+            "total": 5,
+            "query": {"text": "snowmelt"},
+            "result": [
+                {
+                    "id": "ds1",
+                    "dataset": {"name": "Snow dataset"},
+                    "viewUrl": "https://example.org/ds1",
+                }
+            ],
+        }
+
+        filtered = await _apply_local_dataset_filters(
+            client,
+            results,
+            {
+                "creator_affiliation": ["Pennsylvania"],
+                "variable_measured": ["snow water"],
+            },
+        )
+
+        assert filtered["total"] == 1
+        assert filtered["result"][0]["dataset"]["variableMeasured"] == [
+            "snow water equivalent"
+        ]
+        assert filtered["query"]["localFilters"]["creator_affiliation"] == [
+            "Pennsylvania"
+        ]
+        assert filtered["filtering"]["native_total"] == 5
+        client.get_dataset.assert_awaited_once_with("ds1")
+
     @pytest.mark.asyncio
     async def test_get_dataset(self):
         """Test get_dataset method."""
@@ -619,6 +723,74 @@ class TestFormatResults:
         assert isinstance(formatted, str)
         assert "Dataset 1" in formatted
         assert "ds1" in formatted
+
+    def test_format_results_summary_with_local_filtering(self):
+        """Summary format should mention local metadata filtering when used."""
+        client = ESSDiveClient()
+
+        results = {
+            "result": [
+                {
+                    "id": "ds1",
+                    "dataset": {"name": "Dataset 1", "datePublished": "2024-01-01"},
+                    "viewUrl": "https://example.com/ds1",
+                }
+            ],
+            "total": 1,
+            "filtering": {
+                "native_total": 12,
+                "scanned_results": 5,
+                "matched_results": 1,
+            },
+        }
+
+        formatted = client.format_results(results, "summary")
+
+        assert "after local metadata filtering" in formatted
+        assert "from 12 native matches" in formatted
+
+    def test_format_results_detailed_with_extra_metadata(self):
+        """Detailed format should surface richer dataset metadata when present."""
+        client = ESSDiveClient()
+
+        results = {
+            "result": [
+                {
+                    "id": "ds1",
+                    "dataset": {
+                        "name": "Dataset 1",
+                        "datePublished": "2024-01-01",
+                        "alternateName": ["doi:10.15485/example"],
+                        "temporalCoverage": {
+                            "startDate": "2020-01-01",
+                            "endDate": "2020-12-31",
+                        },
+                        "spatialCoverage": [
+                            {
+                                "description": "Pennsylvania",
+                                "geo": {"latitude": 41.0, "longitude": -77.5},
+                            }
+                        ],
+                        "variableMeasured": ["snow water equivalent"],
+                        "measurementTechnique": ["Automated snow-depth sensor"],
+                        "funder": [{"name": "DOE"}],
+                        "license": "https://creativecommons.org/licenses/by/4.0/",
+                    },
+                    "viewUrl": "https://example.com/ds1",
+                }
+            ],
+            "total": 1,
+        }
+
+        formatted = client.format_results(results, "detailed")
+
+        assert "Alternate Names" in formatted
+        assert "Temporal Coverage: 2020-01-01 to 2020-12-31" in formatted
+        assert "Spatial Coverage: Pennsylvania (41.0, -77.5)" in formatted
+        assert "Variables Measured: snow water equivalent" in formatted
+        assert "Measurement Techniques: Automated snow-depth sensor" in formatted
+        assert "Funders: DOE" in formatted
+        assert "License: https://creativecommons.org/licenses/by/4.0/" in formatted
 
     def test_format_results_no_results(self):
         """Test formatting when no results are found."""

@@ -73,6 +73,21 @@ Filter by nearby point search:
 search-datasets with lat=37.7749 and lon=-122.4194 and radius=5000
 ```
 
+Filter by metadata fields that are exposed on full dataset records but not as native
+`/packages` API query parameters:
+
+```
+search-datasets with query="snowmelt" and creator_affiliation="Pennsylvania" and format="detailed"
+```
+
+```
+search-datasets with provider_name="SPRUCE" and variable_measured=["temperature", "CO2"]
+```
+
+```
+search-datasets with funder="Department of Energy" and file_format="csv"
+```
+
 Look up a project acronym and its portal details:
 
 ```
@@ -115,6 +130,9 @@ coords-to-map-links with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
 - `page_size` max is 100; `row_start` is 1-based.
 - `bbox` uses `[min_lat, min_lon, max_lat, max_lon]` ordering and can also be passed as a comma-delimited string.
 - Point search requires `lat`, `lon`, and `radius` together. Do not combine point search with `bbox`.
+- Native ESS-DIVE `/packages` filters include `query`/`text`, `creator`, `provider_name`, `date_published`, `begin_date`, `end_date`, `keywords`, `bbox`, and `lat`/`lon`/`radius`.
+- Additional filters such as `creator_affiliation`, `variable_measured`, `measurement_technique`, `funder`, `license`, `alternate_name`, `editor`, `file_format`, `file_name`, and `file_url` are applied locally after the initial API search using full dataset metadata from `get-dataset`.
+- If you need very precise filtering on those local-only fields, start with a narrower native search first, then apply the local metadata filters.
 - For portal names, acronyms, and URLs, consult `../references/essdive_project_portals.yaml`.
 
 ## Fallback (no MCP server)

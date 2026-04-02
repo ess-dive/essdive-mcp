@@ -367,6 +367,7 @@ Try prompts like:
 ## Example Results
 
 The exact results will change over time as ESS-DIVE and ESS-DeepDive are updated, but successful queries should look roughly like this.
+The post-filtering examples below were re-checked against the live ESS-DIVE API on April 2, 2026.
 
 ### Dataset search example
 
@@ -389,6 +390,84 @@ Found 20 datasets. Showing 3 results:
 2. COMPASS-FME Synoptic Sites Level 1 Sensor Data v2-1
    ID: ess-dive-3aa5e31d62e9ee6-20260331T235820880
    Published: 2025
+```
+
+### Metadata post-filtering examples
+
+These examples use a two-step pattern:
+
+1. run a native ESS-DIVE `/packages` search
+2. fetch full metadata for the current result page and filter locally on fields such as `creator.affiliation`, `variableMeasured`, `funder`, or file formats
+
+That means `page_size` and `row_start` matter. The examples below used `page_size=5`, so the local filter examined the first 5 native matches.
+
+Prompt:
+
+```text
+Search ESS-DIVE for "East River" datasets, then keep only results whose creators are affiliated with Lawrence Berkeley National Laboratory.
+```
+
+Equivalent tool call:
+
+```text
+search-datasets with query="East River" and creator_affiliation="Lawrence Berkeley National Laboratory" and page_size=5
+```
+
+Example result excerpt:
+
+```text
+Found 3 datasets after local metadata filtering. Scanned 5 API results from 307 native matches:
+
+1. Data for "Depth of nutrient uptake by deep-rooted plants is regulated by water availability"
+   ID: ess-dive-4c1829de1b8a2ec-20260401T171210416
+
+2. Mountain Basin Controls on the Snow-to-Streamflow Signal: An AIC-Weighted Multiple Linear Regression Framework
+   ID: ess-dive-a63ff0854da2d62-20260330T232846064
+
+3. CHESS 2025: Leaf Area Index (LAI) for meadow, shrub, tree, and understory vegetation
+   ID: ess-dive-6d3178c5222ea40-20260327T145831553
+```
+
+Prompt:
+
+```text
+Search ESS-DIVE for "East River" datasets, then keep only results where variableMeasured includes streamflow.
+```
+
+Equivalent tool call:
+
+```text
+search-datasets with query="East River" and variable_measured="streamflow" and page_size=5
+```
+
+Example result excerpt:
+
+```text
+Found 1 datasets after local metadata filtering. Scanned 5 API results from 307 native matches:
+
+1. Mountain Basin Controls on the Snow-to-Streamflow Signal: An AIC-Weighted Multiple Linear Regression Framework
+   ID: ess-dive-a63ff0854da2d62-20260330T232846064
+```
+
+Prompt:
+
+```text
+Search ESS-DIVE for "East River" datasets, then keep only results funded by NASA.
+```
+
+Equivalent tool call:
+
+```text
+search-datasets with query="East River" and funder="NASA" and page_size=5
+```
+
+Example result excerpt:
+
+```text
+Found 1 datasets after local metadata filtering. Scanned 5 API results from 307 native matches:
+
+1. Site and endmember spectra of terrestrial vegetation and soils for the Colorado Headwaters Ecological Spectroscopy Study, June-July 2025
+   ID: ess-dive-c938a042bca2b42-20260327T150016394
 ```
 
 ### Identifier conversion example
@@ -465,6 +544,9 @@ search-datasets with query="wildfire recovery" and page_size=5
 search-datasets with begin_date="2020" and end_date="2021" and format="detailed"
 search-datasets with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
 search-datasets with lat=38.8747 and lon=-76.5519 and radius=100
+search-datasets with query="East River" and creator_affiliation="Lawrence Berkeley National Laboratory" and page_size=5
+search-datasets with query="East River" and variable_measured="streamflow" and page_size=5
+search-datasets with query="East River" and funder="NASA" and page_size=5
 get-dataset with id="ess-dive-165671432ae620e-20250908T210722395"
 get-dataset-permissions with id="ess-dive-165671432ae620e-20250908T210722395"
 doi-to-essdive-id with doi="10.15485/2587853"

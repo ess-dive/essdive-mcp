@@ -9,8 +9,9 @@ MCP Tools Available:
 
 **Dataset Search & Retrieval:**
   - search-datasets: Full-text search across ESS-DIVE datasets with filtering by creator,
-    provider, publication date, temporal coverage, keywords, and geographic bounds/nearby
-    search. Supports pagination and multiple result formats.
+    provider, publication date, temporal coverage, keywords, geographic bounds/nearby
+    search, and local metadata-aware post-filters for fields exposed on full dataset
+    records. Supports pagination and multiple result formats.
   - get-dataset: Retrieve detailed metadata for a specific dataset including creators,
     keywords, description, and available data files.
   - get-dataset-permissions: Get sharing and access permission information for datasets.
@@ -300,6 +301,284 @@ def _format_dataset_search_bbox(
         raise ValueError(
             "bbox values must be numeric and ordered as min_lat,min_lon,max_lat,max_lon."
         ) from exc
+
+
+def _as_list(value: Any) -> List[Any]:
+    """Return a value as a list without splitting strings into characters."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _as_string_list(value: Any) -> List[str]:
+    """Flatten strings and lists of strings into a clean list."""
+    values: List[str] = []
+    for item in _as_list(value):
+        if item is None:
+            continue
+        if isinstance(item, list):
+            values.extend(_as_string_list(item))
+            continue
+        text = str(item).strip()
+        if text:
+            values.append(text)
+    return values
+
+
+def _person_display_name(person: Dict[str, Any]) -> str:
+    """Return a readable name for a person-like object."""
+    given_name = str(person.get("givenName") or "").strip()
+    family_name = str(person.get("familyName") or "").strip()
+    full_name = f"{given_name} {family_name}".strip()
+    return full_name or str(person.get("name") or "").strip()
+
+
+def _person_search_strings(person: Dict[str, Any]) -> List[str]:
+    """Collect useful text fields from a person object for local matching."""
+    values = []
+    values.extend(_as_string_list(_person_display_name(person)))
+    values.extend(_as_string_list(person.get("email")))
+    values.extend(_as_string_list(person.get("affiliation")))
+    values.extend(_as_string_list(person.get("@id")))
+    return values
+
+
+def _organization_search_strings(organization: Dict[str, Any]) -> List[str]:
+    """Collect useful text fields from an organization object for local matching."""
+    values = []
+    values.extend(_as_string_list(organization.get("name")))
+    values.extend(_as_string_list(organization.get("email")))
+    values.extend(_as_string_list(organization.get("@id")))
+    return values
+
+
+def _distribution_search_strings(
+    distribution: Any,
+    *,
+    field: str,
+) -> List[str]:
+    """Collect a single distribution field across all file entries."""
+    values: List[str] = []
+    for item in _as_list(distribution):
+        if isinstance(item, dict):
+            values.extend(_as_string_list(item.get(field)))
+    return values
+
+
+def _summarize_temporal_coverage(temporal_coverage: Any) -> Optional[str]:
+    """Return a compact temporal coverage string when available."""
+    if not isinstance(temporal_coverage, dict):
+        return None
+
+    start_date = str(temporal_coverage.get("startDate") or "").strip()
+    end_date = str(temporal_coverage.get("endDate") or "").strip()
+
+    if start_date and end_date:
+        return f"{start_date} to {end_date}"
+    if start_date:
+        return f"{start_date} onward"
+    if end_date:
+        return f"through {end_date}"
+    return None
+
+
+def _summarize_spatial_coverage(spatial_coverage: Any) -> List[str]:
+    """Return readable spatial coverage summaries from ESS-DIVE place metadata."""
+    summaries: List[str] = []
+
+    for place in _as_list(spatial_coverage):
+        if not isinstance(place, dict):
+            continue
+
+        descriptions = _as_string_list(place.get("description"))
+        geo_entries = _as_list(place.get("geo"))
+        geo_parts: List[str] = []
+        for geo in geo_entries:
+            if not isinstance(geo, dict):
+                continue
+            lat = geo.get("latitude")
+            lon = geo.get("longitude")
+            if lat is not None and lon is not None:
+                geo_parts.append(f"{lat}, {lon}")
+
+        description = "; ".join(descriptions)
+        if description and geo_parts:
+            summaries.append(f"{description} ({'; '.join(geo_parts)})")
+        elif description:
+            summaries.append(description)
+        elif geo_parts:
+            summaries.append("; ".join(geo_parts))
+
+    return summaries
+
+
+def _dataset_local_filter_candidates(
+    dataset: Dict[str, Any],
+    filter_name: str,
+) -> List[str]:
+    """Collect candidate strings for a local metadata filter."""
+    if filter_name == "creator_affiliation":
+        values: List[str] = []
+        for creator in _as_list(dataset.get("creator")):
+            if isinstance(creator, dict):
+                values.extend(_as_string_list(creator.get("affiliation")))
+        return values
+
+    if filter_name == "variable_measured":
+        return _as_string_list(dataset.get("variableMeasured"))
+
+    if filter_name == "measurement_technique":
+        return _as_string_list(dataset.get("measurementTechnique"))
+
+    if filter_name == "funder":
+        values: List[str] = []
+        for funder in _as_list(dataset.get("funder")):
+            if isinstance(funder, dict):
+                values.extend(_organization_search_strings(funder))
+            else:
+                values.extend(_as_string_list(funder))
+        return values
+
+    if filter_name == "license":
+        return _as_string_list(dataset.get("license"))
+
+    if filter_name == "alternate_name":
+        return _as_string_list(dataset.get("alternateName"))
+
+    if filter_name == "editor":
+        editor = dataset.get("editor")
+        if isinstance(editor, dict):
+            return _person_search_strings(editor)
+        return _as_string_list(editor)
+
+    if filter_name == "file_format":
+        return _distribution_search_strings(
+            dataset.get("distribution"), field="encodingFormat"
+        )
+
+    if filter_name == "file_name":
+        return _distribution_search_strings(dataset.get("distribution"), field="name")
+
+    if filter_name == "file_url":
+        return _distribution_search_strings(
+            dataset.get("distribution"), field="contentUrl"
+        )
+
+    return []
+
+
+def _normalize_local_filter_values(
+    value: Optional[Union[str, List[str]]],
+) -> List[str]:
+    """Normalize local filter values into a clean string list."""
+    return _as_string_list(value)
+
+
+def _dataset_matches_local_filters(
+    dataset: Dict[str, Any],
+    local_filters: Dict[str, List[str]],
+) -> bool:
+    """Return True when a dataset matches all requested local metadata filters."""
+    for filter_name, expected_values in local_filters.items():
+        if not expected_values:
+            continue
+
+        candidates = [
+            candidate.lower()
+            for candidate in _dataset_local_filter_candidates(dataset, filter_name)
+            if candidate
+        ]
+        if not candidates:
+            return False
+
+        for expected in expected_values:
+            normalized_expected = expected.strip().lower()
+            if not normalized_expected:
+                continue
+            if not any(normalized_expected in candidate for candidate in candidates):
+                return False
+
+    return True
+
+
+async def _hydrate_dataset_search_results(
+    client: "ESSDiveClient",
+    results: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Fetch full dataset records for a search result page."""
+    semaphore = asyncio.Semaphore(5)
+
+    async def fetch_item(item: Dict[str, Any]) -> Dict[str, Any]:
+        dataset_id = item.get("id")
+        if not dataset_id:
+            return item
+
+        async with semaphore:
+            try:
+                detail = await client.get_dataset(str(dataset_id))
+            except Exception as exc:
+                LOGGER.warning(
+                    "Failed to hydrate dataset search result id=%s: %s",
+                    dataset_id,
+                    exc,
+                )
+                return item
+
+        hydrated = dict(item)
+        if isinstance(detail, dict):
+            detail_dataset = detail.get("dataset")
+            if isinstance(detail_dataset, dict):
+                hydrated["dataset"] = detail_dataset
+            for key in ("viewUrl", "citation", "dateUploaded", "dateModified", "isPublic"):
+                if key in detail and key not in hydrated:
+                    hydrated[key] = detail[key]
+        return hydrated
+
+    items = results.get("result", [])
+    if not isinstance(items, list):
+        return []
+    return await asyncio.gather(*(fetch_item(item) for item in items))
+
+
+async def _apply_local_dataset_filters(
+    client: "ESSDiveClient",
+    results: Dict[str, Any],
+    local_filters: Dict[str, List[str]],
+) -> Dict[str, Any]:
+    """Apply metadata-aware local filters to search results using hydrated datasets."""
+    active_filters = {
+        key: values for key, values in local_filters.items() if values
+    }
+    if not active_filters:
+        return results
+
+    hydrated_items = await _hydrate_dataset_search_results(client, results)
+    filtered_items = [
+        item
+        for item in hydrated_items
+        if _dataset_matches_local_filters(item.get("dataset", {}), active_filters)
+    ]
+
+    filtered_results = dict(results)
+    filtered_results["result"] = filtered_items
+    filtered_results["total"] = len(filtered_items)
+
+    query = filtered_results.get("query")
+    if isinstance(query, dict):
+        query = dict(query)
+        query["localFilters"] = active_filters
+        filtered_results["query"] = query
+
+    filtered_results["filtering"] = {
+        "mode": "api_search_then_local_metadata_filter",
+        "native_total": results.get("total"),
+        "scanned_results": len(hydrated_items),
+        "matched_results": len(filtered_items),
+        "local_filters": active_filters,
+    }
+    return filtered_results
 
 
 def _normalize_lookup_text(value: str) -> str:
@@ -869,9 +1148,23 @@ class ESSDiveClient:
 
         datasets = results["result"]
         total = results.get("total", 0)
+        filtering = results.get("filtering")
+
+        if filtering:
+            native_total = filtering.get("native_total")
+            scanned_results = filtering.get("scanned_results")
+            header = (
+                f"Found {total} datasets after local metadata filtering. "
+                f"Scanned {scanned_results} API results"
+            )
+            if native_total is not None:
+                header += f" from {native_total} native matches"
+            header += ":\n\n"
+        else:
+            header = f"Found {total} datasets. Showing {len(datasets)} results:\n\n"
 
         if format_type == "summary":
-            summary = f"Found {total} datasets. Showing {len(datasets)} results:\n\n"
+            summary = header
 
             for i, dataset in enumerate(datasets, 1):
                 ds_data = dataset.get("dataset", {})
@@ -885,7 +1178,7 @@ class ESSDiveClient:
             return summary
 
         elif format_type == "detailed":
-            detailed = f"Found {total} datasets. Showing {len(datasets)} results:\n\n"
+            detailed = header
 
             for i, dataset in enumerate(datasets, 1):
                 ds_data = dataset.get("dataset", {})
@@ -907,6 +1200,48 @@ class ESSDiveClient:
                     if isinstance(keywords, str):
                         keywords = [keywords]
                     detailed += f"   Keywords: {', '.join(keywords)}\n"
+
+                alternate_names = _as_string_list(ds_data.get("alternateName"))
+                if alternate_names:
+                    detailed += f"   Alternate Names: {', '.join(alternate_names)}\n"
+
+                temporal_coverage = _summarize_temporal_coverage(
+                    ds_data.get("temporalCoverage")
+                )
+                if temporal_coverage:
+                    detailed += f"   Temporal Coverage: {temporal_coverage}\n"
+
+                spatial_coverage = _summarize_spatial_coverage(
+                    ds_data.get("spatialCoverage")
+                )
+                if spatial_coverage:
+                    detailed += (
+                        f"   Spatial Coverage: {'; '.join(spatial_coverage[:2])}\n"
+                    )
+
+                variables = _as_string_list(ds_data.get("variableMeasured"))
+                if variables:
+                    detailed += f"   Variables Measured: {', '.join(variables[:6])}\n"
+
+                techniques = _as_string_list(ds_data.get("measurementTechnique"))
+                if techniques:
+                    detailed += (
+                        f"   Measurement Techniques: "
+                        f"{'; '.join(_truncate_text(item, 160) for item in techniques[:2])}\n"
+                    )
+
+                funders = []
+                for funder in _as_list(ds_data.get("funder")):
+                    if isinstance(funder, dict):
+                        funders.extend(_as_string_list(funder.get("name")))
+                    else:
+                        funders.extend(_as_string_list(funder))
+                if funders:
+                    detailed += f"   Funders: {', '.join(funders)}\n"
+
+                license_value = ds_data.get("license")
+                if license_value:
+                    detailed += f"   License: {license_value}\n"
 
                 if i < len(datasets):
                     detailed += "\n"
@@ -1269,6 +1604,16 @@ def main():
         lat: Optional[float] = None,
         lon: Optional[float] = None,
         radius: Optional[float] = None,
+        creator_affiliation: Optional[Union[str, List[str]]] = None,
+        variable_measured: Optional[Union[str, List[str]]] = None,
+        measurement_technique: Optional[Union[str, List[str]]] = None,
+        funder: Optional[Union[str, List[str]]] = None,
+        license: Optional[Union[str, List[str]]] = None,
+        alternate_name: Optional[Union[str, List[str]]] = None,
+        editor: Optional[Union[str, List[str]]] = None,
+        file_format: Optional[Union[str, List[str]]] = None,
+        file_name: Optional[Union[str, List[str]]] = None,
+        file_url: Optional[Union[str, List[str]]] = None,
         row_start: int = 1,
         page_size: int = 25,
         format: str = "summary",
@@ -1288,6 +1633,16 @@ def main():
             lat: Latitude for point-based nearby search
             lon: Longitude for point-based nearby search
             radius: Search radius in meters for point-based nearby search
+            creator_affiliation: Local post-filter on creator affiliation text
+            variable_measured: Local post-filter on variableMeasured values
+            measurement_technique: Local post-filter on measurementTechnique text
+            funder: Local post-filter on funder names/IDs
+            license: Local post-filter on dataset license text/URL
+            alternate_name: Local post-filter on alternateName values
+            editor: Local post-filter on dataset contact/editor metadata
+            file_format: Local post-filter on distribution encodingFormat values
+            file_name: Local post-filter on distribution file names
+            file_url: Local post-filter on distribution content URLs
             row_start: The row number to start on (for pagination)
             page_size: Number of results per page
             format: Format of the results (summary, detailed, raw)
@@ -1298,12 +1653,14 @@ def main():
             search-datasets with begin_date="2020" and end_date="2021-06" and format="detailed"
             search-datasets with bbox=[34.0, -119.0, 35.0, -117.0]
             search-datasets with lat=37.7749 and lon=-122.4194 and radius=5000
+            search-datasets with query="snowmelt" and creator_affiliation="Pennsylvania"
+            search-datasets with provider_name="SPRUCE" and variable_measured=["temperature", "CO2"]
 
         Returns:
             Formatted search results
         """
         LOGGER.debug(
-            "Tool search-datasets called query=%r creator=%r provider_name=%r begin_date=%r end_date=%r bbox=%r lat=%r lon=%r radius=%r row_start=%s page_size=%s format=%s",
+            "Tool search-datasets called query=%r creator=%r provider_name=%r begin_date=%r end_date=%r bbox=%r lat=%r lon=%r radius=%r local_filters=%r row_start=%s page_size=%s format=%s",
             query,
             creator,
             provider_name,
@@ -1313,6 +1670,18 @@ def main():
             lat,
             lon,
             radius,
+            {
+                "creator_affiliation": creator_affiliation,
+                "variable_measured": variable_measured,
+                "measurement_technique": measurement_technique,
+                "funder": funder,
+                "license": license,
+                "alternate_name": alternate_name,
+                "editor": editor,
+                "file_format": file_format,
+                "file_name": file_name,
+                "file_url": file_url,
+            },
             row_start,
             page_size,
             format,
@@ -1326,11 +1695,24 @@ def main():
                 else:
                     keywords_list = keywords
 
+            local_filters = {
+                "creator_affiliation": _normalize_local_filter_values(creator_affiliation),
+                "variable_measured": _normalize_local_filter_values(variable_measured),
+                "measurement_technique": _normalize_local_filter_values(measurement_technique),
+                "funder": _normalize_local_filter_values(funder),
+                "license": _normalize_local_filter_values(license),
+                "alternate_name": _normalize_local_filter_values(alternate_name),
+                "editor": _normalize_local_filter_values(editor),
+                "file_format": _normalize_local_filter_values(file_format),
+                "file_name": _normalize_local_filter_values(file_name),
+                "file_url": _normalize_local_filter_values(file_url),
+            }
+
             # If query is provided but no specific text search parameter,
             # use query as the text search string.
             text = query if query else None
 
-            # Search for datasets (always search public datasets)
+            # Search for datasets using the API's native query parameters first.
             result = await client.search_datasets(
                 row_start=row_start,
                 page_size=page_size,
@@ -1347,6 +1729,10 @@ def main():
                 lon=lon,
                 radius=radius,
             )
+
+            # Apply extra metadata filters locally when the API does not support
+            # them as first-class /packages query params.
+            result = await _apply_local_dataset_filters(client, result, local_filters)
 
             # Format the results
             formatted = client.format_results(result, format)
@@ -1375,6 +1761,16 @@ def main():
                         "lat": lat,
                         "lon": lon,
                         "radius": radius,
+                        "creator_affiliation": creator_affiliation,
+                        "variable_measured": variable_measured,
+                        "measurement_technique": measurement_technique,
+                        "funder": funder,
+                        "license": license,
+                        "alternate_name": alternate_name,
+                        "editor": editor,
+                        "file_format": file_format,
+                        "file_name": file_name,
+                        "file_url": file_url,
                         "row_start": row_start,
                         "page_size": page_size,
                         "format": format,
@@ -1444,6 +1840,69 @@ def main():
                 content += "## Keywords\n"
                 content += ", ".join(keywords)
                 content += "\n\n"
+
+            alternate_names = _as_string_list(dataset.get("alternateName"))
+            if alternate_names:
+                content += "## Alternate Names / Identifiers\n"
+                content += ", ".join(alternate_names)
+                content += "\n\n"
+
+            temporal_coverage = _summarize_temporal_coverage(
+                dataset.get("temporalCoverage")
+            )
+            if temporal_coverage:
+                content += "## Temporal Coverage\n"
+                content += f"{temporal_coverage}\n\n"
+
+            spatial_coverage = _summarize_spatial_coverage(
+                dataset.get("spatialCoverage")
+            )
+            if spatial_coverage:
+                content += "## Spatial Coverage\n"
+                for location in spatial_coverage:
+                    content += f"- {location}\n"
+                content += "\n"
+
+            variables_measured = _as_string_list(dataset.get("variableMeasured"))
+            if variables_measured:
+                content += "## Variables Measured\n"
+                content += ", ".join(variables_measured)
+                content += "\n\n"
+
+            measurement_techniques = _as_string_list(
+                dataset.get("measurementTechnique")
+            )
+            if measurement_techniques:
+                content += "## Measurement Techniques\n"
+                for technique in measurement_techniques:
+                    content += f"- {_truncate_text(technique, 500)}\n"
+                content += "\n"
+
+            funders = []
+            for funder in _as_list(dataset.get("funder")):
+                if isinstance(funder, dict):
+                    funder_name = ", ".join(_organization_search_strings(funder))
+                    if funder_name:
+                        funders.append(funder_name)
+                else:
+                    funders.extend(_as_string_list(funder))
+            if funders:
+                content += "## Funders\n"
+                for funder in funders:
+                    content += f"- {funder}\n"
+                content += "\n"
+
+            editor = dataset.get("editor")
+            if isinstance(editor, dict):
+                editor_details = _person_search_strings(editor)
+                if editor_details:
+                    content += "## Contact\n"
+                    content += f"- {', '.join(editor_details)}\n\n"
+
+            license_value = dataset.get("license")
+            if license_value:
+                content += "## License\n"
+                content += f"{license_value}\n\n"
 
             # Format data files if available
             distribution = dataset.get("distribution", [])

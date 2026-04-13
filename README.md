@@ -2,10 +2,9 @@
 
 An MCP (Model Context Protocol) server for querying ESS-DIVE datasets and the ESS-DeepDive fusion database from chat-based AI clients such as Claude Code, Codex, VS Code with Copilot Chat, and Goose.
 
-Those are examples, not the full list. If your client can connect to local stdio MCP servers, you can usually configure `essdive-mcp` there as well.
-
 ## Table of Contents
 
+- [Quick Start](#quick-start)
 - [What This Project Is](#what-this-project-is)
 - [If You Are New to MCP and Skills](#if-you-are-new-to-mcp-and-skills)
 - [Getting Started](#getting-started)
@@ -20,6 +19,143 @@ Those are examples, not the full list. If your client can connect to local stdio
 - [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
+
+## Quick Start
+
+If you want the fastest path into ESS-DIVE MCP with a desktop app, use Goose Desktop and follow the instructions below. For this quick-start path, you do not need to clone this repository or run `uv sync`, but you will need to use the command line.
+
+If you want a more detailed Goose walkthrough with screenshots, see [docs/GOOSE_SETUP.md](docs/GOOSE_SETUP.md).
+
+### What you need first
+
+These are the minimum prerequisites:
+
+- Python `3.10` or newer
+  Check with `python --version` or `python3 --version`.
+  (If you have it, you will get a response like `Python 3.13.4`.)
+  If you do not have it, install it from <https://www.python.org/downloads/>.
+- `uv`
+  Check with `uv --version`.
+  (If you have it, you will get a response like `uv 0.7.11`.)
+  Install it from <https://docs.astral.sh/uv/getting-started/installation/>.
+  The best installation option for `uv` will depend on your system, but note that you may need to refresh your terminal after installing.
+- Goose Desktop
+  Install it from <https://block.github.io/goose/>.
+  The best installation option will depend on your system. Once installation is complete, run Goose Desktop to complete the next step.
+- Access to an LLM API that Goose Desktop can use.
+  Examples include OpenAI, Anthropic, or LBNL's CBORG. If you plan to use CBORG, see [docs/CBORG_SETUP.md](docs/CBORG_SETUP.md). Goose will prompt you to provide LLM API details when you first run it. For more details and visual examples, see [docs/GOOSE_SETUP.md](docs/GOOSE_SETUP.md).
+- An ESS-DIVE API token.
+  Sign in at <https://data.ess-dive.lbl.gov>. This generally requires authenticating with your ORCID. Once you have done so, open your profile (upper right), then go to the `Settings` tab -> `Authentication Token`. Create a new token or click the `Renew authentication token` button if you need a new token. Copy this token to a safe place.
+
+
+⚠️ Important:
+
+- Goose Desktop must already be configured with your LLM provider and API key before the ESS-DIVE MCP extension will be usable.
+- The ESS-DIVE environment variable name must be exactly `ESSDIVE_API_TOKEN`.
+- ESS-DIVE API tokens expire rapidly, so if the server suddenly stops authenticating, generate a fresh token and update the extension.
+
+### Install in Goose Desktop
+
+This is the simplest setup for a Windows machine:
+
+1. Install Python, `uv`, Goose Desktop, and get your ESS-DIVE token as described above.
+2. Open Goose Desktop and configure your LLM provider.
+3. Add a new Extension for `essdive-mcp`.
+   Use this command:
+
+```text
+uvx --from git+https://github.com/ess-dive/essdive-mcp essdive-mcp
+```
+
+(On Windows, you may have to use `uvx.exe` instead of `uvx`.)
+
+  You will also need to set the extension's environment variable:
+
+```text
+ESSDIVE_API_TOKEN=YOUR_ESS_DIVE_TOKEN_HERE
+```
+
+After you save the extension, start a chat in Goose and ask a simple ESS-DIVE question. If the extension is working, Goose should call ESS-DIVE MCP tools automatically without you needing to type a tool name, though it will likely ask you for permission to use the tool first.
+
+### First prompts to try in Goose
+
+The exact results will change over time, but successful responses should look roughly like these examples.
+
+Prompt:
+
+```text
+Find 3 public ESS-DIVE datasets about wildfire recovery and summarize each one in 1 sentence.
+```
+
+Expected response:
+
+```text
+Here are three public ESS-DIVE datasets related to wildfire recovery:
+
+1. Post-fire Time Series Data from Oak Creek Watershed, Washington: This dataset includes sensor and geochemistry sample data from surface water, groundwater, precipitation, soil, and vegetation, providing insights into the ecological recovery of the watershed after a wildfire. [View Dataset](https://data.ess-dive.lbl.gov/view/doi:10.15485/3018020)
+
+2. Pyrogenic Organic Matter Laboratory Experiment: This dataset examines aerobic respiration and geochemical characteristics from variably inundated stream sediments, contributing to our understanding of soil recovery processes post-wildfire. [View Dataset](https://data.ess-dive.lbl.gov/view/doi:10.15485/3001969)
+
+3. Post-fire Time Series Photos from Oak Creek Watershed, Washington: This collection of photographs documents changes over time at five sites across the watershed, visually capturing the landscape's recovery after wildfire disturbance. [View Dataset](https://data.ess-dive.lbl.gov/view/doi:10.15485/3018598)
+```
+
+Prompt:
+
+```text
+Convert DOI 10.15485/2588618 to an ESS-DIVE dataset ID.
+```
+
+Expected response:
+
+```text
+The ESS-DIVE dataset ID for the DOI 10.15485/2588618 is ess-dive-f002e3e8be8a266-20260401T000217538.
+```
+
+Prompt:
+
+```text
+Search ESS-DeepDive for temperature-related fields and summarize what datasets they come from.
+```
+
+Expected response:
+
+```text
+Here are some temperature-related fields found in the ESS-DeepDive datasets, along with their summaries:
+
+1. **HG_Soil_Temperature_C**: This field measures in situ soil temperature in degrees Celsius, with a record count of 36 values ranging from 19.1 to 26.9°C. It is part of the dataset linked to [DOI: 10.15485/2587853](https://fusion.ess-dive.lbl.gov/api/v1/deepdive/doi:10.15485/2587853:NExpt_ESSDIVE_Datafile.csv).
+
+2. **HG_Soil_Temperature_F**: Similar to the previous field, this one captures in situ soil temperature but in degrees Fahrenheit, also containing 36 records with values from 66.4 to 80.5°F. It belongs to the same dataset as above, accessible via [DOI: 10.15485/2587853](https://fusion.ess-dive.lbl.gov/api/v1/deepdive/doi:10.15485/2587853:NExpt_ESSDIVE_Datafile.csv).
+
+3. **temperature_c**: This field provides groundwater temperature readings in degrees Celsius, with a substantial record count of 144,966 entries ranging from 3.77 to 21.63°C, originating from the dataset associated with [DOI: 10.15485/2587412](https://fusion.ess-dive.lbl.gov/api/v1/deepdive/doi:10.15485/2587412:Machado_Silva_et_al_2024_EST_data.csv).
+
+4. **Effect_Size_Temperature_degC**: This field quantifies the effect size of temperature changes, specifically the comparison between drying and rewetting treatments, with 19 records showing values between -0.3 and 0.5°C. It comes from the dataset tied to [DOI: 10.15485/2583945](https://fusion.ess-dive.lbl.gov/api/v1/deepdive/doi:10.15485/2583945:WHONDRS_MEL_Sample_Data.zip/WHONDRS_EL_Soil_Effect_Size.csv).
+
+5. **Median_Temperature_degC**: Measuring the median temperature with 40 records ranging from 19.8 to 20.8°C, this field is crucial for understanding temperature variations in environmental data, linked to the same dataset as the previous field [DOI: 10.15485/2583945](https://fusion.ess-dive.lbl.gov/api/v1/deepdive/doi:10.15485/2583945:WHONDRS_MEL_Sample_Data.zip/WHONDRS_EL_Soil_Sample_Data_Summary.csv).
+
+These fields collectively provide valuable insights into soil and groundwater temperature dynamics in various environmental contexts.
+```
+
+Prompt:
+
+```text
+Turn the point 38.9219, -106.9490 into map links I can open in geojson.io and Google Maps.
+```
+
+Expected response shape:
+
+```text
+Here are the map links for the point **38.9219, -106.9490**:
+
+- **[Open in geojson.io](https://geojson.io/#data=data:application/json,%7B%22type%22%3A%22FeatureCollection%22%2C%22features%22%3A%5B%7B%22type%22%3A%22Feature%22%2C%22geometry%22%3A%7B%22type%22%3A%22Point%22%2C%22coordinates%22%3A%5B-106.949%2C38.9219%5D%7D%2C%22properties%22%3A%7B%7D%7D%2C%7B%22type%22%3A%22Feature%22%2C%22geometry%22%3A%7B%22type%22%3A%22Polygon%22%2C%22coordinates%22%3A%5B%5B%5B-106.949%2C38.9219%5D%2C%5B-106.949%2C38.9219%5D%2C%5B-106.949%2C38.9219%5D%2C%5B-106.949%2C38.9219%5D%2C%5B-106.949%2C38.9219%5D%5D%5D%7D%2C%22properties%22%3A%7B%22type%22%3A%22bbox%22%7D%7D%5D%7D)
+
+- **[Open in Google Maps](https://www.google.com/maps/@?api=1&map_action=map&center=38.9219,-106.949)**
+
+- **[Open in OpenStreetMap](https://www.openstreetmap.org/?minlon=-106.949&minlat=38.9219&maxlon=-106.949&maxlat=38.9219)**
+
+These links will allow you to view the specified coordinates on the respective mapping platforms.
+```
+
+If you want a fuller manual setup, more client options, or more example queries, continue with the rest of this README.
 
 ## What This Project Is
 
@@ -318,7 +454,19 @@ In the Codex TUI, use `/mcp` to inspect active MCP servers.
 
 ### Goose
 
-In Goose, add a custom STDIO extension with:
+If you want the lowest-friction Goose Desktop setup, use the [Quick Start](#quick-start) path near the top of this README.
+
+For a more detailed Goose walkthrough with screenshots, see [docs/GOOSE_SETUP.md](docs/GOOSE_SETUP.md).
+
+For a Windows Goose Desktop extension that runs directly from GitHub without cloning this repository first:
+
+- Name: `essdive-mcp`
+- Command: `uvx.exe`
+- Arguments: `--from git+https://github.com/ess-dive/essdive-mcp essdive-mcp`
+- Environment: `ESSDIVE_API_TOKEN=YOUR_ESS_DIVE_TOKEN_HERE`
+- Timeout: `300`
+
+If you already cloned this repository and want Goose to run your local checkout instead, add a custom STDIO extension with:
 
 - Name: `essdive-mcp`
 - Command: `uv`

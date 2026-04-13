@@ -2,14 +2,13 @@
 
 An MCP (Model Context Protocol) server for querying ESS-DIVE datasets and the ESS-DeepDive fusion database from chat-based AI clients such as Claude Code, Codex, VS Code with Copilot Chat, and Goose.
 
-Those are examples, not the full list. If your client can connect to local stdio MCP servers, you can usually configure `essdive-mcp` there as well.
-
 ## Table of Contents
 
+- [Quick Start](#quick-start)
 - [What This Project Is](#what-this-project-is)
 - [If You Are New to MCP and Skills](#if-you-are-new-to-mcp-and-skills)
 - [Getting Started](#getting-started)
-- [Connect From One Client](#connect-from-one-client)
+- [Install and Connect to a Client](#install-and-connect-to-a-client)
 - [First Queries to Try](#first-queries-to-try)
 - [Example Results](#example-results)
 - [Tool-Level Examples](#tool-level-examples)
@@ -20,6 +19,152 @@ Those are examples, not the full list. If your client can connect to local stdio
 - [Testing](#testing)
 - [Troubleshooting](#troubleshooting)
 - [License](#license)
+
+## Quick Start
+
+If you want the fastest path into ESS-DIVE MCP with a desktop app, use Goose Desktop and follow the instructions below. For this quick-start path, you do not need to clone this repository or run `uv sync`. You do still need to paste a command into Goose's extension settings.
+
+If you want a more detailed Goose walkthrough with screenshots, see [docs/GOOSE_SETUP.md](docs/GOOSE_SETUP.md).
+
+### What you need first
+
+These are the minimum prerequisites:
+
+- Python `3.10` or newer
+  Check with `python --version` or `python3 --version`.
+  (If you have it, you will get a response like `Python 3.13.4`.)
+  If you do not have it, install it from <https://www.python.org/downloads/>.
+- `uv`
+  Check with `uv --version`.
+  (If you have it, you will get a response like `uv 0.7.11`.)
+  Install it from <https://docs.astral.sh/uv/getting-started/installation/>.
+  The best installation option for `uv` will depend on your system, but note that you may need to refresh your terminal after installing.
+- Goose Desktop
+  Install it from <https://goose-docs.ai/docs/getting-started/installation/>.
+  The best installation option will depend on your system. Once installation is complete, run Goose Desktop to complete the next step.
+- Access to an LLM API that Goose Desktop can use.
+  Examples include OpenAI, Anthropic, or LBNL's CBORG. If you plan to use CBORG, see [docs/CBORG_SETUP.md](docs/CBORG_SETUP.md). Goose will prompt you to provide LLM API details when you first run it. For more details and visual examples, see [docs/GOOSE_SETUP.md](docs/GOOSE_SETUP.md).
+- An ESS-DIVE API token.
+  Sign in at <https://data.ess-dive.lbl.gov>. This generally requires authenticating with your ORCID. Once you have done so, open your profile (upper right), then go to the `Settings` tab -> `Authentication Token`. Create a new token or click the `Renew authentication token` button if you need a new token. Copy this token to a safe place.
+
+
+⚠️ Important:
+
+- Goose Desktop must already be configured with your LLM provider and API key before the ESS-DIVE MCP extension will be usable.
+- The ESS-DIVE environment variable name must be exactly `ESSDIVE_API_TOKEN`.
+- ESS-DIVE says API tokens expire after 24 hours, so if the server suddenly stops authenticating, generate a fresh token and update the extension.
+
+### Install in Goose Desktop
+
+This is the simplest setup if you want Goose to run `essdive-mcp` directly from GitHub without cloning this repository first:
+
+1. Install Python, `uv`, Goose Desktop, and get your ESS-DIVE token as described above.
+2. Open Goose Desktop and configure your LLM provider.
+3. Add a new Extension for `essdive-mcp`.
+   Use one of these commands:
+
+```text
+Windows:
+uvx.exe --from git+https://github.com/ess-dive/essdive-mcp essdive-mcp
+
+macOS/Linux:
+uvx --from git+https://github.com/ess-dive/essdive-mcp essdive-mcp
+```
+
+   If Goose asks for command and arguments separately, use:
+
+   - Windows command: `uvx.exe`
+   - Windows arguments: `--from git+https://github.com/ess-dive/essdive-mcp essdive-mcp`
+   - macOS/Linux command: `uvx`
+   - macOS/Linux arguments: `--from git+https://github.com/ess-dive/essdive-mcp essdive-mcp`
+
+4. Set the extension environment variable:
+
+```text
+ESSDIVE_API_TOKEN=YOUR_ESS_DIVE_TOKEN_HERE
+```
+
+After you save the extension, start a chat in Goose and ask a simple ESS-DIVE question. If the extension is working, Goose should call ESS-DIVE MCP tools automatically without you needing to type a tool name, though it will likely ask you for permission to use the tool first.
+
+### First prompts to try in Goose
+
+The exact results will change over time, but successful responses should look roughly like these examples.
+
+Prompt:
+
+```text
+Find 3 public ESS-DIVE datasets about wildfire recovery and summarize each one in 1 sentence.
+```
+
+Expected response:
+
+```text
+Here are three public ESS-DIVE datasets related to wildfire recovery:
+
+1. Post-fire Time Series Data from Oak Creek Watershed, Washington: This dataset includes sensor and geochemistry sample data from surface water, groundwater, precipitation, soil, and vegetation, providing insights into the ecological recovery of the watershed after a wildfire. [View Dataset](https://data.ess-dive.lbl.gov/view/doi:10.15485/3018020)
+
+2. Pyrogenic Organic Matter Laboratory Experiment: This dataset examines aerobic respiration and geochemical characteristics from variably inundated stream sediments, contributing to our understanding of soil recovery processes post-wildfire. [View Dataset](https://data.ess-dive.lbl.gov/view/doi:10.15485/3001969)
+
+3. Post-fire Time Series Photos from Oak Creek Watershed, Washington: This collection of photographs documents changes over time at five sites across the watershed, visually capturing the landscape's recovery after wildfire disturbance. [View Dataset](https://data.ess-dive.lbl.gov/view/doi:10.15485/3018598)
+```
+
+Prompt:
+
+```text
+Convert DOI 10.15485/2588618 to an ESS-DIVE dataset ID.
+```
+
+Expected response:
+
+```text
+The ESS-DIVE dataset ID for the DOI 10.15485/2588618 is ess-dive-f002e3e8be8a266-20260401T000217538.
+```
+
+Prompt:
+
+```text
+Search ESS-DeepDive for temperature-related fields and summarize what datasets they come from.
+```
+
+Expected response:
+
+```text
+Here are some temperature-related fields found in the ESS-DeepDive datasets, along with their summaries:
+
+1. **HG_Soil_Temperature_C**: This field measures in situ soil temperature in degrees Celsius, with a record count of 36 values ranging from 19.1 to 26.9°C. It is part of the dataset linked to [DOI: 10.15485/2587853](https://fusion.ess-dive.lbl.gov/api/v1/deepdive/doi:10.15485/2587853:NExpt_ESSDIVE_Datafile.csv).
+
+2. **HG_Soil_Temperature_F**: Similar to the previous field, this one captures in situ soil temperature but in degrees Fahrenheit, also containing 36 records with values from 66.4 to 80.5°F. It belongs to the same dataset as above, accessible via [DOI: 10.15485/2587853](https://fusion.ess-dive.lbl.gov/api/v1/deepdive/doi:10.15485/2587853:NExpt_ESSDIVE_Datafile.csv).
+
+3. **temperature_c**: This field provides groundwater temperature readings in degrees Celsius, with a substantial record count of 144,966 entries ranging from 3.77 to 21.63°C, originating from the dataset associated with [DOI: 10.15485/2587412](https://fusion.ess-dive.lbl.gov/api/v1/deepdive/doi:10.15485/2587412:Machado_Silva_et_al_2024_EST_data.csv).
+
+4. **Effect_Size_Temperature_degC**: This field quantifies the effect size of temperature changes, specifically the comparison between drying and rewetting treatments, with 19 records showing values between -0.3 and 0.5°C. It comes from the dataset tied to [DOI: 10.15485/2583945](https://fusion.ess-dive.lbl.gov/api/v1/deepdive/doi:10.15485/2583945:WHONDRS_MEL_Sample_Data.zip/WHONDRS_EL_Soil_Effect_Size.csv).
+
+5. **Median_Temperature_degC**: Measuring the median temperature with 40 records ranging from 19.8 to 20.8°C, this field is crucial for understanding temperature variations in environmental data, linked to the same dataset as the previous field [DOI: 10.15485/2583945](https://fusion.ess-dive.lbl.gov/api/v1/deepdive/doi:10.15485/2583945:WHONDRS_MEL_Sample_Data.zip/WHONDRS_EL_Soil_Sample_Data_Summary.csv).
+
+These fields collectively provide valuable insights into soil and groundwater temperature dynamics in various environmental contexts.
+```
+
+Prompt:
+
+```text
+Turn the point 38.9219, -106.9490 into map links I can open in geojson.io and Google Maps.
+```
+
+Expected response shape:
+
+```text
+Here are the map links for the point **38.9219, -106.9490**:
+
+- **[Open in geojson.io](https://geojson.io/#data=data:application/json,%7B%22type%22%3A%22FeatureCollection%22%2C%22features%22%3A%5B%7B%22type%22%3A%22Feature%22%2C%22geometry%22%3A%7B%22type%22%3A%22Point%22%2C%22coordinates%22%3A%5B-106.949%2C38.9219%5D%7D%2C%22properties%22%3A%7B%7D%7D%2C%7B%22type%22%3A%22Feature%22%2C%22geometry%22%3A%7B%22type%22%3A%22Polygon%22%2C%22coordinates%22%3A%5B%5B%5B-106.949%2C38.9219%5D%2C%5B-106.949%2C38.9219%5D%2C%5B-106.949%2C38.9219%5D%2C%5B-106.949%2C38.9219%5D%2C%5B-106.949%2C38.9219%5D%5D%5D%7D%2C%22properties%22%3A%7B%22type%22%3A%22bbox%22%7D%7D%5D%7D)
+
+- **[Open in Google Maps](https://www.google.com/maps/@?api=1&map_action=map&center=38.9219,-106.949)**
+
+- **[Open in OpenStreetMap](https://www.openstreetmap.org/?minlon=-106.949&minlat=38.9219&maxlon=-106.949&maxlat=38.9219)**
+
+These links will allow you to view the specified coordinates on the respective mapping platforms.
+```
+
+If you want a fuller manual setup, more client options, or more example queries, continue with the rest of this README.
 
 ## What This Project Is
 
@@ -51,21 +196,7 @@ The simplest mental model is:
 
 ## Getting Started
 
-### 1. Install prerequisites
-
-The easiest way to check your setup is:
-
-```bash
-./scripts/check_prereqs.sh
-```
-
-If your shell reports `Permission denied`, run the same script with `bash`, for example:
-
-```bash
-bash scripts/check_prereqs.sh
-```
-
-What each prerequisite is for:
+Before you start, make sure you have the following prerequisites:
 
 - Python 3.10 or newer
   Python runs the `essdive-mcp` server itself.
@@ -81,7 +212,7 @@ What each prerequisite is for:
 
 Other MCP-capable clients may also work. The clients listed here are just the ones this README documents explicitly.
 
-How to check them manually:
+How to check the prerequisites manually:
 
 - Check Python:
 
@@ -125,7 +256,7 @@ git --version
 
 If you do not have `git`, you can still continue by downloading this repository as a ZIP file from GitHub and extracting it locally.
 
-### 2. Download the repository
+### 1. Download the repository
 
 Option A: clone it with `git`:
 
@@ -135,6 +266,22 @@ cd essdive-mcp
 ```
 
 Option B: on the GitHub repository page, use `Code` -> `Download ZIP`, then extract the ZIP and open the extracted `essdive-mcp` folder in your terminal or editor.
+
+### 2. Check prerequisites from the repository
+
+After you have cloned or extracted the repository and opened the `essdive-mcp` folder in your terminal, the easiest way to check your setup is:
+
+```bash
+./scripts/check_prereqs.sh
+```
+
+If your shell reports `Permission denied`, run the same script with `bash`, for example:
+
+```bash
+bash scripts/check_prereqs.sh
+```
+
+This script will check to see if you are missing any install tools like `uv`. It will not check to see if you have client software like Goose or Claude Code installed.
 
 ### 3. Install the project locally
 
@@ -160,9 +307,9 @@ uv sync
 
 ESS-DIVE documents the token workflow in its Dataset API docs.
 
-1. Go to `https://data.ess-dive.lbl.gov` or `https://data-sandbox.ess-dive.lbl.gov`
-2. Sign in with ORCID
-3. Open your profile
+1. Go to `https://data.ess-dive.lbl.gov`
+2. Sign in with your ORCID
+3. Open your profile (upper right-hand icon)
 4. Go to `Settings` -> `Authentication Token`
 5. Copy the token
 
@@ -200,23 +347,30 @@ If you prefer the manual command:
 uv run essdive-mcp --token-file ./essdivetoken
 ```
 
+(Note that this assumes you have saved your ESS-DIVE API token to a file named `essdivetoken`.)
+
 What should happen:
 
 - the process starts
 - it appears to sit there waiting
-- that is normal
 
-This server communicates over standard input/output, so it does not print an interactive menu. After confirming it starts cleanly, stop it with `Ctrl+C` and move on to one client setup below.
+This is the expected result. The MCP server communicates over standard input/output, so it does not print an interactive menu. After confirming it starts cleanly, you may stop it (with `Ctrl+C`, or the equivalent on your system) and move on to one client setup below.
 
-## Connect From One Client
+## Install and Connect to a Client
 
-Choose one of the following. These are alternatives, not sequential steps.
+Choose one of the following clients to use with the ESS-DIVE MCP server. Install the client desktop app then use the instructions here to connect the client to the MCP server. These are alternatives, not sequential steps.
 
 If your preferred client is not listed here, look for that client's MCP server settings and configure it to run:
 
 ```bash
 uv run essdive-mcp --token-file ./essdivetoken
 ```
+
+Client Options:
+- VS Code with GitHub Copilot Chat
+- Claude Code
+- Codex
+- Goose
 
 ### VS Code with GitHub Copilot Chat
 
@@ -318,7 +472,21 @@ In the Codex TUI, use `/mcp` to inspect active MCP servers.
 
 ### Goose
 
-In Goose, add a custom STDIO extension with:
+If you want the lowest-friction Goose Desktop setup, use the [Quick Start](#quick-start) path near the top of this README.
+
+For a more detailed Goose walkthrough with screenshots, see [docs/GOOSE_SETUP.md](docs/GOOSE_SETUP.md).
+
+For a Goose Desktop extension that runs directly from GitHub without cloning this repository first:
+
+- Name: `essdive-mcp`
+- Windows command: `uvx.exe`
+- Windows arguments: `--from git+https://github.com/ess-dive/essdive-mcp essdive-mcp`
+- macOS/Linux command: `uvx`
+- macOS/Linux arguments: `--from git+https://github.com/ess-dive/essdive-mcp essdive-mcp`
+- Environment: `ESSDIVE_API_TOKEN=YOUR_ESS_DIVE_TOKEN_HERE`
+- Timeout: `300`
+
+If you already cloned this repository and want Goose to run your local checkout instead, add a custom STDIO extension with:
 
 - Name: `essdive-mcp`
 - Command: `uv`
@@ -577,6 +745,59 @@ This repository includes three Skills described in [docs/SKILLS.md](docs/SKILLS.
 - `essdive-datasets`
 - `essdive-identifiers`
 - `essdeepdive`
+
+### Quick Start for Skills in Goose Desktop
+
+If you want the simplest way to try these Skills in Goose Desktop, use Goose's standard skill directory instead of the `npx` marketplace workflow.
+
+What you need first:
+
+- Goose Desktop installed and configured with an LLM provider
+- an ESS-DIVE API token available for ESS-DIVE queries
+
+You do not need Python or `uv` just to install the Skill files themselves.
+
+If you have not set up Goose yet, start with the Goose setup instructions in the [Quick Start](#quick-start) above or the screenshot-based guide in [docs/GOOSE_SETUP.md](docs/GOOSE_SETUP.md).
+
+Important:
+
+- Goose's official Skill docs say this feature requires the built-in `Summon` extension in Goose `v1.25.0` or newer.
+- Goose discovers Skills from `~/.agents/skills/` for global Skills or `.agents/skills/` for project-level Skills.
+- For these ESS-DIVE Skills, preserve the directory structure exactly so the shared reference file stays in the expected relative location.
+
+Goose's official Skills guide is here:
+
+- <https://goose-docs.ai/docs/guides/context-engineering/using-skills/>
+
+For the easiest install, copy this repository's Skill tree into one of Goose's standard Skill locations:
+
+```text
+.agents/skills/
+  essdive-datasets/SKILL.md
+  essdive-identifiers/SKILL.md
+  essdeepdive/SKILL.md
+  references/essdive_project_portals.yaml
+```
+
+That means either:
+
+- copy the files into `~/.agents/skills/` if you want them available in all Goose sessions
+- copy the files into `.agents/skills/` inside a specific project if you want them scoped to that project
+
+If you prefer to create the files manually, create these directories and then copy-paste the contents from this repository:
+
+- [SKILL.md](/home/harry/essdive-mcp/.agents/skills/essdive-datasets/SKILL.md)
+- [SKILL.md](/home/harry/essdive-mcp/.agents/skills/essdive-identifiers/SKILL.md)
+- [SKILL.md](/home/harry/essdive-mcp/.agents/skills/essdeepdive/SKILL.md)
+- [essdive_project_portals.yaml](/home/harry/essdive-mcp/.agents/skills/references/essdive_project_portals.yaml)
+
+After copying the files:
+
+1. Start a new Goose session in the project where the Skills are available.
+2. Ask Goose `What skills are available?`
+3. Try a prompt like `Use the essdive-identifiers skill to convert DOI 10.15485/2588618 to an ESS-DIVE dataset ID.`
+
+These Skills work best when paired with the ESS-DIVE MCP setup described earlier in this README, because then Goose can call the ESS-DIVE MCP tools directly. Without the MCP server, the Skills may still help Goose structure ESS-DIVE-related tasks, but behavior depends more on Goose's native tools and fallback API usage.
 
 ### Install Skills in Claude Code
 

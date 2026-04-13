@@ -22,7 +22,7 @@ An MCP (Model Context Protocol) server for querying ESS-DIVE datasets and the ES
 
 ## Quick Start
 
-If you want the fastest path into ESS-DIVE MCP with a desktop app, use Goose Desktop and follow the instructions below. For this quick-start path, you do not need to clone this repository or run `uv sync`, but you will need to use the command line.
+If you want the fastest path into ESS-DIVE MCP with a desktop app, use Goose Desktop and follow the instructions below. For this quick-start path, you do not need to clone this repository or run `uv sync`. You do still need to paste a command into Goose's extension settings.
 
 If you want a more detailed Goose walkthrough with screenshots, see [docs/GOOSE_SETUP.md](docs/GOOSE_SETUP.md).
 
@@ -40,7 +40,7 @@ These are the minimum prerequisites:
   Install it from <https://docs.astral.sh/uv/getting-started/installation/>.
   The best installation option for `uv` will depend on your system, but note that you may need to refresh your terminal after installing.
 - Goose Desktop
-  Install it from <https://block.github.io/goose/>.
+  Install it from <https://goose-docs.ai/docs/getting-started/installation/>.
   The best installation option will depend on your system. Once installation is complete, run Goose Desktop to complete the next step.
 - Access to an LLM API that Goose Desktop can use.
   Examples include OpenAI, Anthropic, or LBNL's CBORG. If you plan to use CBORG, see [docs/CBORG_SETUP.md](docs/CBORG_SETUP.md). Goose will prompt you to provide LLM API details when you first run it. For more details and visual examples, see [docs/GOOSE_SETUP.md](docs/GOOSE_SETUP.md).
@@ -52,24 +52,33 @@ These are the minimum prerequisites:
 
 - Goose Desktop must already be configured with your LLM provider and API key before the ESS-DIVE MCP extension will be usable.
 - The ESS-DIVE environment variable name must be exactly `ESSDIVE_API_TOKEN`.
-- ESS-DIVE API tokens expire rapidly, so if the server suddenly stops authenticating, generate a fresh token and update the extension.
+- ESS-DIVE says API tokens expire after 24 hours, so if the server suddenly stops authenticating, generate a fresh token and update the extension.
 
 ### Install in Goose Desktop
 
-This is the simplest setup for a Windows machine:
+This is the simplest setup if you want Goose to run `essdive-mcp` directly from GitHub without cloning this repository first:
 
 1. Install Python, `uv`, Goose Desktop, and get your ESS-DIVE token as described above.
 2. Open Goose Desktop and configure your LLM provider.
 3. Add a new Extension for `essdive-mcp`.
-   Use this command:
+   Use one of these commands:
 
 ```text
+Windows:
+uvx.exe --from git+https://github.com/ess-dive/essdive-mcp essdive-mcp
+
+macOS/Linux:
 uvx --from git+https://github.com/ess-dive/essdive-mcp essdive-mcp
 ```
 
-(On Windows, you may have to use `uvx.exe` instead of `uvx`.)
+   If Goose asks for command and arguments separately, use:
 
-  You will also need to set the extension's environment variable:
+   - Windows command: `uvx.exe`
+   - Windows arguments: `--from git+https://github.com/ess-dive/essdive-mcp essdive-mcp`
+   - macOS/Linux command: `uvx`
+   - macOS/Linux arguments: `--from git+https://github.com/ess-dive/essdive-mcp essdive-mcp`
+
+4. Set the extension environment variable:
 
 ```text
 ESSDIVE_API_TOKEN=YOUR_ESS_DIVE_TOKEN_HERE
@@ -187,21 +196,7 @@ The simplest mental model is:
 
 ## Getting Started
 
-### 1. Install prerequisites
-
-The easiest way to check your setup is:
-
-```bash
-./scripts/check_prereqs.sh
-```
-
-If your shell reports `Permission denied`, run the same script with `bash`, for example:
-
-```bash
-bash scripts/check_prereqs.sh
-```
-
-What each prerequisite is for:
+Before you start, make sure you have the following prerequisites:
 
 - Python 3.10 or newer
   Python runs the `essdive-mcp` server itself.
@@ -217,7 +212,7 @@ What each prerequisite is for:
 
 Other MCP-capable clients may also work. The clients listed here are just the ones this README documents explicitly.
 
-How to check them manually:
+How to check the prerequisites manually:
 
 - Check Python:
 
@@ -261,7 +256,7 @@ git --version
 
 If you do not have `git`, you can still continue by downloading this repository as a ZIP file from GitHub and extracting it locally.
 
-### 2. Download the repository
+### 1. Download the repository
 
 Option A: clone it with `git`:
 
@@ -271,6 +266,22 @@ cd essdive-mcp
 ```
 
 Option B: on the GitHub repository page, use `Code` -> `Download ZIP`, then extract the ZIP and open the extracted `essdive-mcp` folder in your terminal or editor.
+
+### 2. Check prerequisites from the repository
+
+After you have cloned or extracted the repository and opened the `essdive-mcp` folder in your terminal, the easiest way to check your setup is:
+
+```bash
+./scripts/check_prereqs.sh
+```
+
+If your shell reports `Permission denied`, run the same script with `bash`, for example:
+
+```bash
+bash scripts/check_prereqs.sh
+```
+
+This script will check to see if you are missing any install tools like `uv`. It will not check to see if you have client software like Goose or Claude Code installed.
 
 ### 3. Install the project locally
 
@@ -296,9 +307,9 @@ uv sync
 
 ESS-DIVE documents the token workflow in its Dataset API docs.
 
-1. Go to `https://data.ess-dive.lbl.gov` or `https://data-sandbox.ess-dive.lbl.gov`
-2. Sign in with ORCID
-3. Open your profile
+1. Go to `https://data.ess-dive.lbl.gov`
+2. Sign in with your ORCID
+3. Open your profile (upper right-hand icon)
 4. Go to `Settings` -> `Authentication Token`
 5. Copy the token
 
@@ -336,13 +347,14 @@ If you prefer the manual command:
 uv run essdive-mcp --token-file ./essdivetoken
 ```
 
+(Note that this assumes you have saved your ESS-DIVE API token to a file named `essdivetoken`.)
+
 What should happen:
 
 - the process starts
 - it appears to sit there waiting
-- that is normal
 
-This server communicates over standard input/output, so it does not print an interactive menu. After confirming it starts cleanly, stop it with `Ctrl+C` and move on to one client setup below.
+This is the expected result. The MCP server communicates over standard input/output, so it does not print an interactive menu. After confirming it starts cleanly, you may stop it (with `Ctrl+C`, or the equivalent on your system) and move on to one client setup below.
 
 ## Connect From One Client
 
@@ -458,11 +470,13 @@ If you want the lowest-friction Goose Desktop setup, use the [Quick Start](#quic
 
 For a more detailed Goose walkthrough with screenshots, see [docs/GOOSE_SETUP.md](docs/GOOSE_SETUP.md).
 
-For a Windows Goose Desktop extension that runs directly from GitHub without cloning this repository first:
+For a Goose Desktop extension that runs directly from GitHub without cloning this repository first:
 
 - Name: `essdive-mcp`
-- Command: `uvx.exe`
-- Arguments: `--from git+https://github.com/ess-dive/essdive-mcp essdive-mcp`
+- Windows command: `uvx.exe`
+- Windows arguments: `--from git+https://github.com/ess-dive/essdive-mcp essdive-mcp`
+- macOS/Linux command: `uvx`
+- macOS/Linux arguments: `--from git+https://github.com/ess-dive/essdive-mcp essdive-mcp`
 - Environment: `ESSDIVE_API_TOKEN=YOUR_ESS_DIVE_TOKEN_HERE`
 - Timeout: `300`
 

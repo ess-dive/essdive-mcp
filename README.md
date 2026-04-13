@@ -8,7 +8,7 @@ An MCP (Model Context Protocol) server for querying ESS-DIVE datasets and the ES
 - [What This Project Is](#what-this-project-is)
 - [If You Are New to MCP and Skills](#if-you-are-new-to-mcp-and-skills)
 - [Getting Started](#getting-started)
-- [Connect From One Client](#connect-from-one-client)
+- [Install and Connect to a Client](#install-and-connect-to-a-client)
 - [First Queries to Try](#first-queries-to-try)
 - [Example Results](#example-results)
 - [Tool-Level Examples](#tool-level-examples)
@@ -356,15 +356,21 @@ What should happen:
 
 This is the expected result. The MCP server communicates over standard input/output, so it does not print an interactive menu. After confirming it starts cleanly, you may stop it (with `Ctrl+C`, or the equivalent on your system) and move on to one client setup below.
 
-## Connect From One Client
+## Install and Connect to a Client
 
-Choose one of the following. These are alternatives, not sequential steps.
+Choose one of the following clients to use with the ESS-DIVE MCP server. Install the client desktop app then use the instructions here to connect the client to the MCP server. These are alternatives, not sequential steps.
 
 If your preferred client is not listed here, look for that client's MCP server settings and configure it to run:
 
 ```bash
 uv run essdive-mcp --token-file ./essdivetoken
 ```
+
+Client Options:
+- VS Code with GitHub Copilot Chat
+- Claude Code
+- Codex
+- Goose
 
 ### VS Code with GitHub Copilot Chat
 

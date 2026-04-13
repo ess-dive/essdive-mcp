@@ -746,6 +746,59 @@ This repository includes three Skills described in [docs/SKILLS.md](docs/SKILLS.
 - `essdive-identifiers`
 - `essdeepdive`
 
+### Quick Start for Skills in Goose Desktop
+
+If you want the simplest way to try these Skills in Goose Desktop, use Goose's standard skill directory instead of the `npx` marketplace workflow.
+
+What you need first:
+
+- Goose Desktop installed and configured with an LLM provider
+- an ESS-DIVE API token available for ESS-DIVE queries
+
+You do not need Python or `uv` just to install the Skill files themselves.
+
+If you have not set up Goose yet, start with the Goose setup instructions in the [Quick Start](#quick-start) above or the screenshot-based guide in [docs/GOOSE_SETUP.md](docs/GOOSE_SETUP.md).
+
+Important:
+
+- Goose's official Skill docs say this feature requires the built-in `Summon` extension in Goose `v1.25.0` or newer.
+- Goose discovers Skills from `~/.agents/skills/` for global Skills or `.agents/skills/` for project-level Skills.
+- For these ESS-DIVE Skills, preserve the directory structure exactly so the shared reference file stays in the expected relative location.
+
+Goose's official Skills guide is here:
+
+- <https://goose-docs.ai/docs/guides/context-engineering/using-skills/>
+
+For the easiest install, copy this repository's Skill tree into one of Goose's standard Skill locations:
+
+```text
+.agents/skills/
+  essdive-datasets/SKILL.md
+  essdive-identifiers/SKILL.md
+  essdeepdive/SKILL.md
+  references/essdive_project_portals.yaml
+```
+
+That means either:
+
+- copy the files into `~/.agents/skills/` if you want them available in all Goose sessions
+- copy the files into `.agents/skills/` inside a specific project if you want them scoped to that project
+
+If you prefer to create the files manually, create these directories and then copy-paste the contents from this repository:
+
+- [SKILL.md](/home/harry/essdive-mcp/.agents/skills/essdive-datasets/SKILL.md)
+- [SKILL.md](/home/harry/essdive-mcp/.agents/skills/essdive-identifiers/SKILL.md)
+- [SKILL.md](/home/harry/essdive-mcp/.agents/skills/essdeepdive/SKILL.md)
+- [essdive_project_portals.yaml](/home/harry/essdive-mcp/.agents/skills/references/essdive_project_portals.yaml)
+
+After copying the files:
+
+1. Start a new Goose session in the project where the Skills are available.
+2. Ask Goose `What skills are available?`
+3. Try a prompt like `Use the essdive-identifiers skill to convert DOI 10.15485/2588618 to an ESS-DIVE dataset ID.`
+
+These Skills work best when paired with the ESS-DIVE MCP setup described earlier in this README, because then Goose can call the ESS-DIVE MCP tools directly. Without the MCP server, the Skills may still help Goose structure ESS-DIVE-related tasks, but behavior depends more on Goose's native tools and fallback API usage.
+
 ### Install Skills in Claude Code
 
 Register the local marketplace:

@@ -19,6 +19,7 @@ from essdive_mcp.main import (
     search_project_portals,
     _dataset_matches_local_filters,
     _apply_local_dataset_filters,
+    _default_dataset_search_is_public,
 )
 import pytest
 import os
@@ -69,6 +70,18 @@ class TestBooleanHelpers:
         assert not _is_truthy("false")
         assert not _is_truthy("")
         assert not _is_truthy(None)
+
+
+class TestDatasetSearchVisibilityDefaults:
+    """Tests for default public/private search visibility behavior."""
+
+    def test_anonymous_search_defaults_to_public_only(self):
+        """Anonymous search should keep the existing public-only behavior."""
+        assert _default_dataset_search_is_public(None) is True
+
+    def test_authenticated_search_allows_private_matches(self):
+        """Authenticated search should not force the API back to public-only."""
+        assert _default_dataset_search_is_public("token-123") is None
 
 
 class TestToolErrorPayload:

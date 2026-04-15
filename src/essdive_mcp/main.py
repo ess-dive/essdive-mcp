@@ -216,6 +216,11 @@ def _context_without_none(context: Dict[str, Any]) -> Dict[str, Any]:
     return {key: value for key, value in context.items() if value is not None}
 
 
+def _default_dataset_search_is_public(api_token: Optional[str]) -> Optional[bool]:
+    """Use public-only search anonymously; allow private matches when authenticated."""
+    return True if not api_token else None
+
+
 def _is_essdive_empty_search_response(response: httpx.Response) -> bool:
     """Return True when ESS-DIVE encodes an empty search result as HTTP 404."""
     if response.status_code != 404:
@@ -1874,7 +1879,7 @@ def main():
             result = await client.search_datasets(
                 row_start=row_start,
                 page_size=page_size,
-                is_public=True,
+                is_public=_default_dataset_search_is_public(client.api_token),
                 creator=creator,
                 provider_name=provider_name,
                 text=text,

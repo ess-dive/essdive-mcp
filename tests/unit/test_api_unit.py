@@ -20,6 +20,7 @@ from essdive_mcp.main import (
     _dataset_matches_local_filters,
     _apply_local_dataset_filters,
     _default_dataset_search_is_public,
+    _resolve_startup_api_token,
 )
 import pytest
 import os
@@ -52,6 +53,17 @@ class TestGetApiKey:
         """Missing token config should be allowed for anonymous public access."""
         with patch.dict(os.environ, {}, clear=True):
             assert get_api_key(None) is None
+
+    def test_resolve_startup_api_token_warns_and_falls_back_on_bad_token_file(
+        self, caplog: pytest.LogCaptureFixture
+    ):
+        """Unreadable token files should warn and fall back to anonymous mode."""
+        with caplog.at_level("WARNING", logger="essdive_mcp"):
+            resolved = _resolve_startup_api_token(token_file="/tmp/definitely-missing")
+
+        assert resolved is None
+        assert "Could not read ESS-DIVE token file" in caplog.text
+        assert "Starting without ESS-DIVE auth" in caplog.text
 
 
 class TestBooleanHelpers:

@@ -1711,6 +1711,21 @@ def get_api_key(
     return api_key or None
 
 
+def _resolve_startup_api_token(
+    api_key: Optional[str] = None,
+    token_file: Optional[str] = None,
+) -> Optional[str]:
+    """Resolve startup auth config, falling back to anonymous mode on file errors."""
+    try:
+        return get_api_key(api_key, token_file=token_file)
+    except ValueError as exc:
+        LOGGER.warning(
+            "%s Starting without ESS-DIVE auth; public dataset reads will still work.",
+            exc,
+        )
+        return None
+
+
 def main():
     """Main entry point for the MCP server."""
     # Parse command-line arguments
@@ -1735,7 +1750,7 @@ def main():
     verbose_mode = args.verbose or _is_truthy(os.getenv("ESSDIVE_MCP_VERBOSE"))
     _configure_logging(verbose_mode)
 
-    api_token = get_api_key(args.token, token_file=args.token_file)
+    api_token = _resolve_startup_api_token(args.token, token_file=args.token_file)
 
     LOGGER.info(
         "Starting ESS-DIVE MCP server (verbose=%s, authenticated=%s)",

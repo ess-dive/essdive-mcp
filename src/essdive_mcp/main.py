@@ -1128,7 +1128,8 @@ class ESSDiveClient:
             params["cursor"] = cursor
 
         url = self._package_url(identifier, "/versions")
-        LOGGER.debug("ESS-DIVE get dataset versions request url=%s params=%s", url, params)
+        LOGGER.debug(
+            "ESS-DIVE get dataset versions request url=%s params=%s", url, params)
 
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
             response = await client.get(
@@ -1142,7 +1143,8 @@ class ESSDiveClient:
         LOGGER.debug(
             "ESS-DIVE get dataset versions response total=%s count=%s",
             result.get("total"),
-            len(result.get("result", [])) if isinstance(result, dict) else "n/a",
+            len(result.get("result", [])) if isinstance(
+                result, dict) else "n/a",
         )
         return result
 
@@ -1210,7 +1212,8 @@ class ESSDiveClient:
         datasets = results["result"]
         total = results.get("total", 0)
         filtering = results.get("filtering")
-        query = results.get("query", {}) if isinstance(results.get("query"), dict) else {}
+        query = results.get("query", {}) if isinstance(
+            results.get("query"), dict) else {}
         sort_value = query.get("sort")
 
         if filtering:

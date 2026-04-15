@@ -132,7 +132,8 @@ class TestProjectPortalReferences:
         result = search_project_portals("East River", limit=5)
 
         assert result["count"] >= 1
-        assert any("East River" in item["name"] or "East River" in " ".join(item["aliases"]) for item in result["results"])
+        assert any("East River" in item["name"] or "East River" in " ".join(
+            item["aliases"]) for item in result["results"])
 
     def test_search_project_portals_without_query_lists_entries(self):
         """Listing without a query should return a bounded set of entries."""
@@ -453,7 +454,8 @@ class TestESSDiveClient:
         )
         mock_response_obj = Mock()
         mock_response_obj.status_code = 404
-        mock_response_obj.json.return_value = {"detail": "No datasets were found."}
+        mock_response_obj.json.return_value = {
+            "detail": "No datasets were found."}
         mock_response_obj.raise_for_status.side_effect = httpx.HTTPStatusError(
             "404 not found",
             request=request,
@@ -688,7 +690,8 @@ class TestESSDiveClient:
 
         with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
             mock_client_instance = AsyncMock()
-            mock_client_instance.get = AsyncMock(return_value=mock_response_obj)
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
             mock_client_instance.__aenter__.return_value = mock_client_instance
             mock_client_instance.__aexit__.return_value = None
             mock_client_class.return_value = mock_client_instance
@@ -711,7 +714,8 @@ class TestESSDiveClient:
 
         with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
             mock_client_instance = AsyncMock()
-            mock_client_instance.get = AsyncMock(return_value=mock_response_obj)
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
             mock_client_instance.__aenter__.return_value = mock_client_instance
             mock_client_instance.__aexit__.return_value = None
             mock_client_class.return_value = mock_client_instance

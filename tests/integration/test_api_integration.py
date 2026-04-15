@@ -68,7 +68,8 @@ async def test_get_dataset_versions_live_without_token(
     assert response["pageSize"] == 2
     assert isinstance(response["result"], list)
     assert len(response["result"]) >= 1
-    assert all(item["dataset"]["@id"] == example["doi"] for item in response["result"])
+    assert all(item["dataset"]["@id"] == example["doi"]
+               for item in response["result"])
     assert all(item.get("viewUrl") for item in response["result"])
 
 
@@ -93,7 +94,8 @@ async def test_get_dataset_versions_live_cursor_pagination_without_token(
     assert second_page["previousCursor"] is not None
     assert second_ids
     assert second_ids.isdisjoint(first_ids)
-    assert all(item["dataset"]["@id"] == example["doi"] for item in second_page["result"])
+    assert all(item["dataset"]["@id"] == example["doi"]
+               for item in second_page["result"])
 
 
 @pytest.mark.asyncio
@@ -119,7 +121,8 @@ async def test_search_public_datasets_live_without_token(
     assert isinstance(response, dict)
     assert response["total"] > 0
     assert isinstance(response["result"], list)
-    assert str(example["expected_id"]) in {item["id"] for item in response["result"]}
+    assert str(example["expected_id"]) in {
+        item["id"] for item in response["result"]}
 
 
 @pytest.mark.asyncio

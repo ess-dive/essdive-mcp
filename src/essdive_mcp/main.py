@@ -240,8 +240,9 @@ def _is_essdive_empty_search_response(response: httpx.Response) -> bool:
 
 def _empty_dataset_search_result(
     *,
-    row_start: int,
-    page_size: int,
+    row_start: Optional[int],
+    page_size: Optional[int],
+    cursor: Optional[str],
     is_public: Optional[bool],
     creator: Optional[str],
     provider_name: Optional[str],
@@ -257,10 +258,8 @@ def _empty_dataset_search_result(
     radius: Optional[float],
 ) -> Dict[str, Any]:
     """Return a stable empty search payload when the API reports no matches."""
-    return {
+    payload = {
         "total": 0,
-        "pageSize": page_size,
-        "rowStart": row_start,
         "result": [],
         "query": {
             "isPublic": is_public,
@@ -272,12 +271,18 @@ def _empty_dataset_search_result(
             "endDate": end_date,
             "keywords": keywords,
             "sort": sort,
+            "cursor": cursor,
             "bbox": bbox,
             "lat": lat,
             "lon": lon,
             "radius": radius,
         },
     }
+    if page_size is not None:
+        payload["pageSize"] = page_size
+    if row_start is not None:
+        payload["rowStart"] = row_start
+    return payload
 
 
 def _run_in_new_event_loop(awaitable: Awaitable[T]) -> T:
@@ -954,8 +959,9 @@ class ESSDiveClient:
 
     async def search_datasets(
         self,
-        row_start: int = 1,
-        page_size: int = 25,
+        row_start: Optional[int] = None,
+        page_size: Optional[int] = None,
+        cursor: Optional[str] = None,
         is_public: Optional[bool] = None,
         creator: Optional[str] = None,
         provider_name: Optional[str] = None,
@@ -974,8 +980,9 @@ class ESSDiveClient:
         Search for datasets using the ESS-DIVE API.
 
         Args:
-            row_start: The row number to start on (for pagination)
+            row_start: Legacy row number to start on (for pagination)
             page_size: Number of results per page (max 100)
+            cursor: Opaque cursor for follow-up pages of search results
             is_public: If True, only return public packages
             creator: Filter by dataset creator
             provider_name: Filter by dataset project/provider
@@ -996,11 +1003,14 @@ class ESSDiveClient:
         Examples:
             await client.search_datasets(text="soil carbon", page_size=5, is_public=True)
             await client.search_datasets(provider_name="NGEE Arctic", row_start=1, page_size=10)
+            await client.search_datasets(text="soil carbon", cursor="opaque-cursor")
             await client.search_datasets(begin_date="2020", end_date="2021-06")
             await client.search_datasets(text="soil carbon", sort="name:asc")
             await client.search_datasets(bbox=[34.0, -119.0, 35.0, -117.0])
         """
         params: Dict[str, Any] = {}
+        effective_row_start = 1 if row_start is None else row_start
+        effective_page_size = 25 if page_size is None else page_size
         normalized_bbox = _validate_dataset_search_spatial_params(
             bbox=bbox,
             lat=lat,
@@ -1008,9 +1018,14 @@ class ESSDiveClient:
             radius=radius,
         )
 
-        # Always include pagination parameters
-        params["rowStart"] = row_start
-        params["pageSize"] = page_size
+        # Cursor pagination supersedes legacy rowStart pagination.
+        if cursor:
+            params["cursor"] = cursor
+            if page_size is not None:
+                params["pageSize"] = page_size
+        else:
+            params["rowStart"] = effective_row_start
+            params["pageSize"] = effective_page_size
 
         # Add optional parameters if provided
         if is_public is not None:
@@ -1054,8 +1069,9 @@ class ESSDiveClient:
                         "converting to an empty result set"
                     )
                     return _empty_dataset_search_result(
-                        row_start=row_start,
-                        page_size=page_size,
+                        row_start=None if cursor else effective_row_start,
+                        page_size=page_size if cursor else effective_page_size,
+                        cursor=cursor,
                         is_public=is_public,
                         creator=creator,
                         provider_name=provider_name,
@@ -1220,6 +1236,7 @@ class ESSDiveClient:
         query = results.get("query", {}) if isinstance(
             results.get("query"), dict) else {}
         sort_value = query.get("sort")
+        has_cursor_pagination = "nextCursor" in results or "previousCursor" in results
 
         if filtering:
             native_total = filtering.get("native_total")
@@ -1236,6 +1253,11 @@ class ESSDiveClient:
 
         if sort_value:
             header += f"Sort: {sort_value}\n\n"
+        if has_cursor_pagination:
+            header += (
+                f"Pagination: previousCursor={results.get('previousCursor') or 'None'}; "
+                f"nextCursor={results.get('nextCursor') or 'None'}\n\n"
+            )
 
         if format_type == "summary":
             summary = header
@@ -1789,8 +1811,9 @@ def main():
         file_format: Optional[Union[str, List[str]]] = None,
         file_name: Optional[Union[str, List[str]]] = None,
         file_url: Optional[Union[str, List[str]]] = None,
-        row_start: int = 1,
-        page_size: int = 25,
+        cursor: Optional[str] = None,
+        row_start: Optional[int] = None,
+        page_size: Optional[int] = None,
         format: str = "summary",
     ) -> str:
         """
@@ -1819,8 +1842,9 @@ def main():
             file_format: Local post-filter on distribution encodingFormat values
             file_name: Local post-filter on distribution file names
             file_url: Local post-filter on distribution content URLs
-            row_start: The row number to start on (for pagination)
-            page_size: Number of results per page
+            cursor: Opaque cursor for a follow-up page of search results
+            row_start: Legacy row number to start on when not using cursor pagination
+            page_size: Number of results per page; omit on cursor follow-up unless it matches the cursor
             format: Format of the results (summary, detailed, raw)
 
         Examples:
@@ -1828,6 +1852,7 @@ def main():
             search-datasets with creator="Smith" and provider_name="NGEE Arctic"
             search-datasets with begin_date="2020" and end_date="2021-06" and format="detailed"
             search-datasets with query="soil carbon" and sort="name:asc"
+            search-datasets with query="BIONTE" and cursor="opaque-cursor"
             search-datasets with bbox=[34.0, -119.0, 35.0, -117.0]
             search-datasets with lat=37.7749 and lon=-122.4194 and radius=5000
             search-datasets with query="snowmelt" and creator_affiliation="Pennsylvania"
@@ -1837,13 +1862,14 @@ def main():
             Formatted search results
         """
         LOGGER.debug(
-            "Tool search-datasets called query=%r creator=%r provider_name=%r begin_date=%r end_date=%r sort=%r bbox=%r lat=%r lon=%r radius=%r local_filters=%r row_start=%s page_size=%s format=%s",
+            "Tool search-datasets called query=%r creator=%r provider_name=%r begin_date=%r end_date=%r sort=%r cursor=%r bbox=%r lat=%r lon=%r radius=%r local_filters=%r row_start=%s page_size=%s format=%s",
             query,
             creator,
             provider_name,
             begin_date,
             end_date,
             sort,
+            cursor,
             bbox,
             lat,
             lon,
@@ -1894,6 +1920,7 @@ def main():
             result = await client.search_datasets(
                 row_start=row_start,
                 page_size=page_size,
+                cursor=cursor,
                 is_public=_default_dataset_search_is_public(client.api_token),
                 creator=creator,
                 provider_name=provider_name,
@@ -1937,6 +1964,7 @@ def main():
                         "begin_date": begin_date,
                         "end_date": end_date,
                         "sort": sort,
+                        "cursor": cursor,
                         "bbox": bbox,
                         "lat": lat,
                         "lon": lon,

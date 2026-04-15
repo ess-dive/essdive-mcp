@@ -84,6 +84,18 @@ search-datasets with query="soil carbon" and sort="name:asc"
 search-datasets with query="soil carbon" and sort="dateUploaded:desc,authorLastName:asc"
 ```
 
+Follow a search cursor to the next page:
+
+```
+search-datasets with query="BIONTE" and sort="name:asc" and page_size=2
+```
+
+Then use the returned `nextCursor` or `previousCursor`:
+
+```
+search-datasets with query="BIONTE" and sort="name:asc" and cursor="PASTE_NEXT_OR_PREVIOUS_CURSOR_HERE"
+```
+
 Filter by bounding box:
 
 ```
@@ -182,7 +194,9 @@ coords-to-map-links with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
 ## Notes
 
 - Use `format="summary"` for compact results, or `format="detailed"` for full metadata.
-- `page_size` max is 100; `row_start` is 1-based.
+- `page_size` max is 100.
+- `cursor` is the preferred way to page through search results. `row_start` is still supported for compatibility but is legacy.
+- For cursor follow-up searches, reuse the same search filters and omit `page_size` unless you know it matches the cursor's encoded page size.
 - `sort` accepts comma-separated `field:direction` clauses. Supported fields: `name`, `dateUploaded`, `authorLastName`. Supported directions: `asc`, `desc`.
 - `get-dataset-versions` lists visible versions from newest to oldest and supports cursor pagination.
 - For `get-dataset-versions`, omit `page_size` on cursor follow-up calls unless you know it matches the cursor's encoded page size.
@@ -206,6 +220,17 @@ curl -sG "https://api.ess-dive.lbl.gov/packages" \
   --data-urlencode "text=soil carbon" \
   --data-urlencode "pageSize=10" \
   --data-urlencode "rowStart=1" \
+  --data-urlencode "isPublic=true"
+```
+
+Follow a dataset-search cursor directly against the API:
+
+```bash
+curl -sG "https://api.ess-dive.lbl.gov/packages" \
+  -H "Accept: application/json" \
+  --data-urlencode "text=BIONTE" \
+  --data-urlencode "sort=name:asc" \
+  --data-urlencode "cursor=PASTE_NEXT_OR_PREVIOUS_CURSOR_HERE" \
   --data-urlencode "isPublic=true"
 ```
 

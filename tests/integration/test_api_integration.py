@@ -145,6 +145,39 @@ async def test_search_public_datasets_live_sorting_without_token():
     assert names == sorted(names, key=str.casefold)
 
 
+@pytest.mark.asyncio
+async def test_search_public_datasets_live_cursor_pagination_without_token():
+    """Search results should support cursor-based pagination without authentication."""
+    client = ESSDiveClient()
+
+    first_page = await client.search_datasets(
+        text="BIONTE",
+        is_public=True,
+        page_size=2,
+        sort="name:asc",
+    )
+
+    next_cursor = first_page.get("nextCursor")
+    if not next_cursor:
+        pytest.skip("Search fixture no longer spans multiple result pages.")
+
+    second_page = await client.search_datasets(
+        text="BIONTE",
+        is_public=True,
+        sort="name:asc",
+        cursor=next_cursor,
+    )
+
+    first_ids = {item["id"] for item in first_page["result"]}
+    second_ids = {item["id"] for item in second_page["result"]}
+
+    assert second_page["previousCursor"] is not None
+    assert second_ids
+    assert second_ids.isdisjoint(first_ids)
+    assert second_page["query"]["sort"] == "name:asc"
+    assert second_page["query"]["text"] == "BIONTE"
+
+
 def test_doi_to_essdive_id_live_without_token(
     essdive_dataset_examples: list[dict[str, str]],
 ):

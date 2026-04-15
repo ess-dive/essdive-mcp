@@ -415,6 +415,60 @@ class TestESSDiveClient:
             assert params["sort"] == "dateUploaded:desc,authorLastName:asc"
 
     @pytest.mark.asyncio
+    async def test_search_datasets_cursor_omits_legacy_row_start_and_default_page_size(self):
+        """Cursor follow-up search requests should not force rowStart or pageSize defaults."""
+        client = ESSDiveClient(api_token="test_token")
+
+        mock_response_obj = Mock()
+        mock_response_obj.json.return_value = {"result": [], "total": 0}
+        mock_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            await client.search_datasets(
+                text="soil carbon",
+                cursor="cursor-123",
+                sort="name:asc",
+            )
+
+            params = mock_client_instance.get.call_args.kwargs["params"]
+            assert params == {"cursor": "cursor-123", "text": "soil carbon", "sort": "name:asc"}
+
+    @pytest.mark.asyncio
+    async def test_search_datasets_cursor_includes_explicit_matching_page_size(self):
+        """Cursor follow-up requests may include pageSize only when explicitly supplied."""
+        client = ESSDiveClient(api_token="test_token")
+
+        mock_response_obj = Mock()
+        mock_response_obj.json.return_value = {"result": [], "total": 0}
+        mock_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            await client.search_datasets(
+                text="soil carbon",
+                cursor="cursor-123",
+                page_size=10,
+            )
+
+            params = mock_client_instance.get.call_args.kwargs["params"]
+            assert params["cursor"] == "cursor-123"
+            assert params["pageSize"] == 10
+            assert "rowStart" not in params
+
+    @pytest.mark.asyncio
     async def test_search_datasets_accepts_string_bbox(self):
         """bbox may be provided in the API's comma-delimited string format."""
         client = ESSDiveClient(api_token="test_token")
@@ -884,6 +938,27 @@ class TestFormatResults:
         formatted = client.format_results(results, "summary")
 
         assert "Sort: name:asc" in formatted
+
+    def test_format_results_summary_includes_cursor_pagination(self):
+        """Summary format should expose next/previous cursors when present."""
+        client = ESSDiveClient()
+
+        results = {
+            "result": [
+                {
+                    "id": "ds1",
+                    "dataset": {"name": "Dataset 1", "datePublished": "2024-01-01"},
+                    "viewUrl": "https://example.com/ds1",
+                }
+            ],
+            "total": 10,
+            "nextCursor": "next-cursor",
+            "previousCursor": None,
+        }
+
+        formatted = client.format_results(results, "summary")
+
+        assert "Pagination: previousCursor=None; nextCursor=next-cursor" in formatted
 
     def test_format_results_detailed_with_extra_metadata(self):
         """Detailed format should surface richer dataset metadata when present."""

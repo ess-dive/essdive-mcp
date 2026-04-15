@@ -173,7 +173,7 @@ If you want a fuller manual setup, more client options, or more example queries,
 This project gives an AI client a set of tools for:
 
 - searching public ESS-DIVE datasets
-- fetching dataset metadata and sharing permissions
+- fetching dataset metadata, version history, and sharing permissions
 - converting between ESS-DIVE dataset IDs and DOIs
 - parsing File Level Metadata (FLMD) CSV content
 - searching ESS-DeepDive field and file metadata
@@ -520,6 +520,7 @@ Try prompts like:
 ### Dataset details and permissions
 
 - `Get the metadata for ESS-DIVE dataset ess-dive-165671432ae620e-20250908T210722395.`
+- `Show the version history for DOI 10.15485/2529445 and tell me what changed most recently.`
 - `Show the sharing permissions for ESS-DIVE dataset ess-dive-165671432ae620e-20250908T210722395.`
 
 ### Identifier conversion
@@ -722,6 +723,8 @@ search-datasets with query="East River" and creator_affiliation="Lawrence Berkel
 search-datasets with query="East River" and variable_measured="streamflow" and page_size=5
 search-datasets with query="East River" and funder="NASA" and page_size=5
 get-dataset with id="ess-dive-165671432ae620e-20250908T210722395"
+get-dataset-versions with id="doi:10.15485/2529445" and page_size=2
+get-dataset-versions with id="doi:10.15485/2529445" and cursor="PASTE_NEXT_CURSOR_HERE"
 get-dataset-permissions with id="ess-dive-165671432ae620e-20250908T210722395"
 doi-to-essdive-id with doi="10.15485/2587853"
 essdive-id-to-doi with essdive_id="ess-dive-165671432ae620e-20250908T210722395"
@@ -838,6 +841,7 @@ You can ask for a Skill by name, or let the agent choose it when relevant.
 Examples:
 
 - `Use the essdive-datasets skill to find recent wildfire-related datasets and then fetch the metadata for the best match.`
+- `Use the essdive-datasets skill to list the version history for DOI 10.15485/2529445 and summarize the newest two versions.`
 - `Use the essdive-identifiers skill to normalize DOI https://doi.org/10.15485/2587853 and return the ESS-DIVE ID.`
 - `Use the essdeepdive skill to search for temperature fields and tell me which data file each result comes from.`
 
@@ -893,6 +897,7 @@ and the observed values range from 19.1 to 26.9 C.
 
 - `search-datasets`
 - `get-dataset`
+- `get-dataset-versions`
 - `get-dataset-permissions`
 - `parse-flmd-file`
 

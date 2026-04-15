@@ -58,7 +58,7 @@ The shared project reference file lives at [`../.agents/skills/references/essdiv
 
 ### `essdive-datasets`
 
-Search ESS-DIVE datasets with keyword, temporal, and geographic filters; fetch metadata and permissions; and parse FLMD CSV content.
+Search ESS-DIVE datasets with keyword, temporal, and geographic filters; fetch metadata, version history, and permissions; and parse FLMD CSV content.
 
 See [`../.agents/skills/essdive-datasets/SKILL.md`](../.agents/skills/essdive-datasets/SKILL.md).
 
@@ -126,6 +126,7 @@ To remove them:
 - `Use the essdive-datasets skill to find public ESS-DIVE datasets about wildfire recovery and summarize the top results.`
 - `Use the essdive-datasets skill to search for datasets inside the bounding box [38.9187, -106.9532, 38.9263, -106.9451] and summarize the matches.`
 - `Use the essdive-datasets skill to search for datasets within 100 meters of 38.8747, -76.5519 and summarize the matches.`
+- `Use the essdive-datasets skill to show the version history for DOI 10.15485/2529445 and summarize the newest two versions.`
 - `Use the essdive-datasets skill to search for East River datasets and then keep only results with Lawrence Berkeley Lab creator affiliations.`
 - `Use the essdive-datasets skill to search for East River datasets and then keep only results where variableMeasured includes streamflow.`
 

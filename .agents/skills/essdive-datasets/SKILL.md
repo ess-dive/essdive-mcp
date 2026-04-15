@@ -1,11 +1,17 @@
 ---
 name: essdive-datasets
-description: Search ESS-DIVE datasets, fetch metadata/permissions, and parse FLMD via MCP tools.
+description: Search ESS-DIVE datasets, fetch metadata/version history/permissions, and parse FLMD via MCP tools.
 ---
 
 # Setup (once)
 
 Run the MCP server locally:
+
+```bash
+uv run python src/essdive_mcp/main.py
+```
+
+If you need authenticated/private-data access, provide a token explicitly:
 
 ```bash
 uv run python src/essdive_mcp/main.py --token YOUR_ESS_DIVE_TOKEN_HERE
@@ -23,6 +29,12 @@ between ESS and DIVE).
 Register with Claude Code (stdio transport):
 
 ```bash
+claude mcp add --transport stdio essdive-mcp -- uv run python ./src/essdive_mcp/main.py
+```
+
+If you need authenticated/private-data access, add a token:
+
+```bash
 claude mcp add --transport stdio essdive-mcp --env ESSDIVE_API_TOKEN=YOUR_ESS_DIVE_TOKEN_HERE -- uv run python ./src/essdive_mcp/main.py
 ```
 
@@ -36,6 +48,7 @@ claude mcp add --transport stdio essdive-mcp -- uv run python ./src/essdive_mcp/
 
 - `search-datasets`
 - `get-dataset`
+- `get-dataset-versions`
 - `get-dataset-permissions`
 - `parse-flmd-file`
 - `lookup-project-portal`
@@ -120,6 +133,18 @@ Get detailed metadata for a dataset:
 get-dataset with id="ess-dive-9ea5fe57db73c90-20241024T093714082510"
 ```
 
+List version history from newest to oldest:
+
+```
+get-dataset-versions with id="doi:10.15485/2529445" and page_size=2
+```
+
+Follow a version-history cursor:
+
+```
+get-dataset-versions with id="doi:10.15485/2529445" and cursor="PASTE_NEXT_OR_PREVIOUS_CURSOR_HERE"
+```
+
 Check sharing permissions (requires token):
 
 ```
@@ -148,6 +173,8 @@ coords-to-map-links with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
 
 - Use `format="summary"` for compact results, or `format="detailed"` for full metadata.
 - `page_size` max is 100; `row_start` is 1-based.
+- `get-dataset-versions` lists visible versions from newest to oldest and supports cursor pagination.
+- For `get-dataset-versions`, omit `page_size` on cursor follow-up calls unless you know it matches the cursor's encoded page size.
 - `bbox` uses `[min_lat, min_lon, max_lat, max_lon]` ordering and can also be passed as a comma-delimited string.
 - Point search requires `lat`, `lon`, and `radius` together. Do not combine point search with `bbox`.
 - Native ESS-DIVE `/packages` filters include `query`/`text`, `creator`, `provider_name`, `date_published`, `begin_date`, `end_date`, `keywords`, `bbox`, and `lat`/`lon`/`radius`.
@@ -190,4 +217,12 @@ curl -sG "https://api.ess-dive.lbl.gov/packages/REPLACE_WITH_PACKAGE_ID" \
   -H "User-Agent: Mozilla/5.0" \
   -H "Range: bytes=0-1000" \
   --data-urlencode "isPublic=true"
+```
+
+Fetch dataset version history by DOI or package ID:
+
+```bash
+curl -sG "https://api.ess-dive.lbl.gov/packages/doi%3A10.15485%2F2529445/versions" \
+  -H "Accept: application/json" \
+  --data-urlencode "pageSize=2"
 ```

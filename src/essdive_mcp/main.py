@@ -14,6 +14,8 @@ MCP Tools Available:
     records. Supports pagination and multiple result formats.
   - get-dataset: Retrieve detailed metadata for a specific dataset including creators,
     keywords, description, and available data files.
+  - get-dataset-versions: List visible versions of a dataset from newest to oldest,
+    with cursor-based pagination support for version history navigation.
   - get-dataset-permissions: Get sharing and access permission information for datasets.
 
 **Identifier Conversion:**
@@ -1087,6 +1089,55 @@ class ESSDiveClient:
                      result.get("id"))
         return result
 
+    async def get_dataset_versions(
+        self,
+        identifier: str,
+        page_size: Optional[int] = None,
+        cursor: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        List visible versions of a dataset from newest to oldest.
+
+        Args:
+            identifier: The ESS-DIVE unique identifier or DOI
+            page_size: Optional number of versions to return (API default: 10, max: 10)
+            cursor: Optional opaque cursor from a previous versions response
+
+        Returns:
+            API response containing dataset versions and pagination cursors
+
+        Examples:
+            await client.get_dataset_versions("doi:10.15485/2453885", page_size=5)
+            await client.get_dataset_versions(
+                "ess-dive-9ea5fe57db73c90-20241024T093714082510",
+                cursor="opaque-cursor",
+            )
+        """
+        params: Dict[str, Any] = {}
+        if page_size is not None:
+            params["pageSize"] = page_size
+        if cursor:
+            params["cursor"] = cursor
+
+        url = self._package_url(identifier, "/versions")
+        LOGGER.debug("ESS-DIVE get dataset versions request url=%s params=%s", url, params)
+
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
+            response = await client.get(
+                url,
+                params=params or None,
+                headers=self._get_headers(),
+            )
+            response.raise_for_status()
+            result = response.json()
+
+        LOGGER.debug(
+            "ESS-DIVE get dataset versions response total=%s count=%s",
+            result.get("total"),
+            len(result.get("result", [])) if isinstance(result, dict) else "n/a",
+        )
+        return result
+
     async def get_dataset_status(self, identifier: str) -> Dict[str, Any]:
         """
         Get the status of a dataset (DOI minting, publication, visibility).
@@ -1247,6 +1298,98 @@ class ESSDiveClient:
                     detailed += f"   License: {license_value}\n"
 
                 if i < len(datasets):
+                    detailed += "\n"
+
+            return detailed
+
+        return results
+
+    def format_dataset_versions(
+        self, results: Dict[str, Any], format_type: str = "summary"
+    ) -> Union[str, Dict[str, Any]]:
+        """
+        Format dataset version history into a readable summary.
+
+        Args:
+            results: The API response to format
+            format_type: Type of formatting ('summary', 'detailed', 'raw')
+
+        Returns:
+            Formatted version history as string or dict
+        """
+        if format_type == "raw":
+            return results
+
+        if "result" not in results:
+            return "No version history found or invalid response format."
+
+        versions = results["result"]
+        total = results.get("total", 0)
+        header = (
+            f"Found {total} visible dataset versions. "
+            f"Showing {len(versions)} results from newest to oldest:\n"
+        )
+
+        pagination = (
+            "\nPagination:\n"
+            f"  previousCursor: {results.get('previousCursor') or 'None'}\n"
+            f"  nextCursor: {results.get('nextCursor') or 'None'}\n\n"
+        )
+
+        if format_type == "summary":
+            summary = header + pagination
+
+            for i, version in enumerate(versions, 1):
+                dataset = version.get("dataset", {})
+                doi = dataset.get("@id") or dataset.get("doi")
+                summary += f"{i}. {dataset.get('name', 'Untitled')}\n"
+                summary += f"   ID: {version.get('id', 'Unknown')}\n"
+                if doi:
+                    summary += f"   DOI: {doi}\n"
+                summary += f"   Uploaded: {version.get('dateUploaded', 'Unknown')}\n"
+                summary += f"   Published: {dataset.get('datePublished', 'Unknown')}\n"
+                summary += f"   URL: {version.get('viewUrl', 'Unknown')}\n"
+                if i < len(versions):
+                    summary += "\n"
+
+            return summary
+
+        if format_type == "detailed":
+            detailed = header + pagination
+
+            for i, version in enumerate(versions, 1):
+                dataset = version.get("dataset", {})
+                doi = dataset.get("@id") or dataset.get("doi")
+                detailed += f"{i}. {dataset.get('name', 'Untitled')}\n"
+                detailed += f"   ID: {version.get('id', 'Unknown')}\n"
+                if doi:
+                    detailed += f"   DOI: {doi}\n"
+                detailed += f"   Uploaded: {version.get('dateUploaded', 'Unknown')}\n"
+                detailed += f"   Modified: {version.get('dateModified', 'Unknown')}\n"
+                detailed += f"   Published: {dataset.get('datePublished', 'Unknown')}\n"
+                detailed += f"   Public: {version.get('isPublic', 'Unknown')}\n"
+                detailed += f"   View URL: {version.get('viewUrl', 'Unknown')}\n"
+                detailed += f"   API URL: {version.get('url', 'Unknown')}\n"
+
+                description = dataset.get("description", "")
+                if isinstance(description, list):
+                    description = " ".join(description)
+                if description:
+                    detailed += (
+                        f"   Description: {description[:300]}"
+                        f"{'...' if len(description) > 300 else ''}\n"
+                    )
+
+                citation = version.get("citation")
+                if citation:
+                    detailed += f"   Citation: {citation}\n"
+
+                if version.get("next"):
+                    detailed += f"   Newer Version URL: {version['next']}\n"
+                if version.get("previous"):
+                    detailed += f"   Older Version URL: {version['previous']}\n"
+
+                if i < len(versions):
                     detailed += "\n"
 
             return detailed
@@ -1921,6 +2064,69 @@ def main():
                 exc,
                 verbose=verbose_mode,
                 context={"id": id},
+            )
+
+    @server.tool(
+        name="get-dataset-versions",
+        description="List visible versions of a specific dataset from newest to oldest",
+    )
+    async def get_dataset_versions_tool(
+        id: str,
+        page_size: Optional[int] = None,
+        cursor: Optional[str] = None,
+        format: str = "summary",
+    ) -> str:
+        """
+        List visible versions for a dataset from newest to oldest.
+
+        Args:
+            id: ESS-DIVE dataset identifier or DOI
+            page_size: Optional number of versions to return (API default: 10, max: 10)
+            cursor: Optional opaque cursor from a previous versions response
+            format: Format of the results (summary, detailed, raw)
+
+        Examples:
+            get-dataset-versions with id="doi:10.15485/2529445"
+            get-dataset-versions with id="doi:10.15485/2529445" and page_size=2
+            get-dataset-versions with id="doi:10.15485/2529445" and cursor="opaque-cursor"
+
+        Returns:
+            Formatted dataset version history
+        """
+        LOGGER.debug(
+            "Tool get-dataset-versions called id=%s page_size=%s cursor=%r format=%s",
+            id,
+            page_size,
+            cursor,
+            format,
+        )
+        try:
+            result = await client.get_dataset_versions(
+                id,
+                page_size=page_size,
+                cursor=cursor,
+            )
+            formatted = client.format_dataset_versions(result, format)
+
+            if format == "raw":
+                return json.dumps(formatted, indent=2)
+            if isinstance(formatted, dict):
+                return json.dumps(formatted, indent=2)
+            return str(formatted)
+
+        except Exception as exc:
+            return _tool_error_response(
+                "get-dataset-versions",
+                exc,
+                verbose=verbose_mode,
+                context=_context_without_none(
+                    {
+                        "id": id,
+                        "page_size": page_size,
+                        "cursor": cursor,
+                        "format": format,
+                    }
+                ),
             )
 
     @server.tool(

@@ -54,6 +54,49 @@ async def test_get_public_dataset_by_id_live_without_token(
 
 
 @pytest.mark.asyncio
+async def test_get_dataset_versions_live_without_token(
+    essdive_dataset_examples: list[dict[str, str]],
+):
+    """Public dataset version history should be retrievable without authentication."""
+    client = ESSDiveClient()
+    example = essdive_dataset_examples[0]
+
+    response = await client.get_dataset_versions(example["doi"], page_size=2)
+
+    assert isinstance(response, dict)
+    assert response["total"] >= 1
+    assert response["pageSize"] == 2
+    assert isinstance(response["result"], list)
+    assert len(response["result"]) >= 1
+    assert all(item["dataset"]["@id"] == example["doi"] for item in response["result"])
+    assert all(item.get("viewUrl") for item in response["result"])
+
+
+@pytest.mark.asyncio
+async def test_get_dataset_versions_live_cursor_pagination_without_token(
+    essdive_dataset_examples: list[dict[str, str]],
+):
+    """Version-history cursors should fetch a later page of older versions."""
+    client = ESSDiveClient()
+    example = essdive_dataset_examples[0]
+
+    first_page = await client.get_dataset_versions(example["doi"], page_size=2)
+    next_cursor = first_page.get("nextCursor")
+    if not next_cursor:
+        pytest.skip("Fixture dataset no longer spans multiple version pages.")
+
+    second_page = await client.get_dataset_versions(example["doi"], cursor=next_cursor)
+
+    first_ids = {item["id"] for item in first_page["result"]}
+    second_ids = {item["id"] for item in second_page["result"]}
+
+    assert second_page["previousCursor"] is not None
+    assert second_ids
+    assert second_ids.isdisjoint(first_ids)
+    assert all(item["dataset"]["@id"] == example["doi"] for item in second_page["result"])
+
+
+@pytest.mark.asyncio
 async def test_search_public_datasets_live_without_token(
     essdive_search_examples: list[dict[str, Any]],
 ):

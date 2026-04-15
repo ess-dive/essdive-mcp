@@ -512,6 +512,7 @@ Start with plain natural-language prompts. You do not need to call tool names di
 Try prompts like:
 
 - `Find public ESS-DIVE datasets about soil carbon and summarize the top five results.`
+- `Find public ESS-DIVE datasets about BIONTE sorted by name ascending.`
 - `Search ESS-DIVE for datasets inside the bounding box [38.9187, -106.9532, 38.9263, -106.9451].`
 - `Search ESS-DIVE for datasets within 100 meters of 38.8747, -76.5519 and summarize the results.`
 - `Find ESS-DIVE datasets published in 2024 about wildfire recovery.`
@@ -716,6 +717,7 @@ If your client supports direct tool calling, these examples map closely to the a
 
 ```text
 search-datasets with query="wildfire recovery" and page_size=5
+search-datasets with query="BIONTE" and sort="name:asc" and page_size=3
 search-datasets with begin_date="2020" and end_date="2021" and format="detailed"
 search-datasets with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
 search-datasets with lat=38.8747 and lon=-76.5519 and radius=100
@@ -841,6 +843,7 @@ You can ask for a Skill by name, or let the agent choose it when relevant.
 Examples:
 
 - `Use the essdive-datasets skill to find recent wildfire-related datasets and then fetch the metadata for the best match.`
+- `Use the essdive-datasets skill to search for BIONTE datasets sorted by name ascending and summarize the first three.`
 - `Use the essdive-datasets skill to list the version history for DOI 10.15485/2529445 and summarize the newest two versions.`
 - `Use the essdive-identifiers skill to normalize DOI https://doi.org/10.15485/2587853 and return the ESS-DIVE ID.`
 - `Use the essdeepdive skill to search for temperature fields and tell me which data file each result comes from.`

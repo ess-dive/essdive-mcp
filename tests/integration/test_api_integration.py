@@ -122,6 +122,26 @@ async def test_search_public_datasets_live_without_token(
     assert str(example["expected_id"]) in {item["id"] for item in response["result"]}
 
 
+@pytest.mark.asyncio
+async def test_search_public_datasets_live_sorting_without_token():
+    """Anonymous callers should be able to request supported API sort orders."""
+    client = ESSDiveClient()
+
+    response = await client.search_datasets(
+        text="BIONTE",
+        is_public=True,
+        page_size=3,
+        sort="name:asc",
+    )
+
+    assert isinstance(response, dict)
+    assert response["query"]["sort"] == "name:asc"
+    assert len(response["result"]) >= 2
+
+    names = [item["dataset"]["name"] for item in response["result"]]
+    assert names == sorted(names, key=str.casefold)
+
+
 def test_doi_to_essdive_id_live_without_token(
     essdive_dataset_examples: list[dict[str, str]],
 ):

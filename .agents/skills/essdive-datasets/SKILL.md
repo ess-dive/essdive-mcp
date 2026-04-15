@@ -74,6 +74,16 @@ Filter by temporal coverage:
 search-datasets with begin_date="2020" and end_date="2021-06" and format="detailed"
 ```
 
+Sort results by one or more API-supported fields:
+
+```
+search-datasets with query="soil carbon" and sort="name:asc"
+```
+
+```
+search-datasets with query="soil carbon" and sort="dateUploaded:desc,authorLastName:asc"
+```
+
 Filter by bounding box:
 
 ```
@@ -173,11 +183,12 @@ coords-to-map-links with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
 
 - Use `format="summary"` for compact results, or `format="detailed"` for full metadata.
 - `page_size` max is 100; `row_start` is 1-based.
+- `sort` accepts comma-separated `field:direction` clauses. Supported fields: `name`, `dateUploaded`, `authorLastName`. Supported directions: `asc`, `desc`.
 - `get-dataset-versions` lists visible versions from newest to oldest and supports cursor pagination.
 - For `get-dataset-versions`, omit `page_size` on cursor follow-up calls unless you know it matches the cursor's encoded page size.
 - `bbox` uses `[min_lat, min_lon, max_lat, max_lon]` ordering and can also be passed as a comma-delimited string.
 - Point search requires `lat`, `lon`, and `radius` together. Do not combine point search with `bbox`.
-- Native ESS-DIVE `/packages` filters include `query`/`text`, `creator`, `provider_name`, `date_published`, `begin_date`, `end_date`, `keywords`, `bbox`, and `lat`/`lon`/`radius`.
+- Native ESS-DIVE `/packages` filters include `query`/`text`, `creator`, `provider_name`, `date_published`, `begin_date`, `end_date`, `keywords`, `sort`, `bbox`, and `lat`/`lon`/`radius`.
 - Additional filters such as `creator_affiliation`, `variable_measured`, `measurement_technique`, `funder`, `license`, `alternate_name`, `editor`, `file_format`, `file_name`, and `file_url` are applied locally after the initial API search using full dataset metadata from `get-dataset`.
 - If you need very precise filtering on those local-only fields, start with a narrower native search first, then apply the local metadata filters.
 - Local metadata filtering only inspects the current API page, so increase `page_size` or adjust `row_start` if you want to scan more native matches.

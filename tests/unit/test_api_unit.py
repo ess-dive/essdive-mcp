@@ -364,6 +364,31 @@ class TestESSDiveClient:
             assert params["bbox"] == "34.0,-119.0,35.0,-117.0"
 
     @pytest.mark.asyncio
+    async def test_search_datasets_includes_sort_param(self):
+        """Sort directives should be forwarded to the API."""
+        client = ESSDiveClient(api_token="test_token")
+
+        mock_response_obj = Mock()
+        mock_response_obj.json.return_value = {"result": [], "total": 0}
+        mock_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            await client.search_datasets(
+                text="soil carbon",
+                sort="dateUploaded:desc,authorLastName:asc",
+            )
+
+            params = mock_client_instance.get.call_args.kwargs["params"]
+            assert params["sort"] == "dateUploaded:desc,authorLastName:asc"
+
+    @pytest.mark.asyncio
     async def test_search_datasets_accepts_string_bbox(self):
         """bbox may be provided in the API's comma-delimited string format."""
         client = ESSDiveClient(api_token="test_token")
@@ -810,6 +835,26 @@ class TestFormatResults:
 
         assert "after local metadata filtering" in formatted
         assert "from 12 native matches" in formatted
+
+    def test_format_results_summary_includes_effective_sort(self):
+        """Summary format should surface the effective API sort order."""
+        client = ESSDiveClient()
+
+        results = {
+            "result": [
+                {
+                    "id": "ds1",
+                    "dataset": {"name": "Dataset 1", "datePublished": "2024-01-01"},
+                    "viewUrl": "https://example.com/ds1",
+                }
+            ],
+            "total": 1,
+            "query": {"sort": "name:asc"},
+        }
+
+        formatted = client.format_results(results, "summary")
+
+        assert "Sort: name:asc" in formatted
 
     def test_format_results_detailed_with_extra_metadata(self):
         """Detailed format should surface richer dataset metadata when present."""

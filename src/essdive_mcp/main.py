@@ -245,6 +245,7 @@ def _empty_dataset_search_result(
     begin_date: Optional[str],
     end_date: Optional[str],
     keywords: Optional[List[str]],
+    sort: Optional[str],
     bbox: Optional[str],
     lat: Optional[float],
     lon: Optional[float],
@@ -265,6 +266,7 @@ def _empty_dataset_search_result(
             "beginDate": begin_date,
             "endDate": end_date,
             "keywords": keywords,
+            "sort": sort,
             "bbox": bbox,
             "lat": lat,
             "lon": lon,
@@ -957,6 +959,7 @@ class ESSDiveClient:
         begin_date: Optional[str] = None,
         end_date: Optional[str] = None,
         keywords: Optional[List[str]] = None,
+        sort: Optional[str] = None,
         bbox: Optional[Union[str, List[float]]] = None,
         lat: Optional[float] = None,
         lon: Optional[float] = None,
@@ -976,6 +979,7 @@ class ESSDiveClient:
             begin_date: Filter by temporal coverage window start date
             end_date: Filter by temporal coverage window end date
             keywords: Search for datasets with specific keywords
+            sort: Sort order such as "name:asc" or "dateUploaded:desc,authorLastName:asc"
             bbox: Bounding box filter as "min_lat,min_lon,max_lat,max_lon" or [min_lat, min_lon, max_lat, max_lon]
             lat: Latitude for point-based nearby search
             lon: Longitude for point-based nearby search
@@ -988,6 +992,7 @@ class ESSDiveClient:
             await client.search_datasets(text="soil carbon", page_size=5, is_public=True)
             await client.search_datasets(provider_name="NGEE Arctic", row_start=1, page_size=10)
             await client.search_datasets(begin_date="2020", end_date="2021-06")
+            await client.search_datasets(text="soil carbon", sort="name:asc")
             await client.search_datasets(bbox=[34.0, -119.0, 35.0, -117.0])
         """
         params: Dict[str, Any] = {}
@@ -1019,6 +1024,8 @@ class ESSDiveClient:
             params["endDate"] = end_date
         if keywords:
             params["keywords"] = keywords
+        if sort:
+            params["sort"] = sort
         if normalized_bbox:
             params["bbox"] = normalized_bbox
         if lat is not None:
@@ -1052,6 +1059,7 @@ class ESSDiveClient:
                         begin_date=begin_date,
                         end_date=end_date,
                         keywords=keywords,
+                        sort=sort,
                         bbox=normalized_bbox,
                         lat=lat,
                         lon=lon,
@@ -1202,6 +1210,8 @@ class ESSDiveClient:
         datasets = results["result"]
         total = results.get("total", 0)
         filtering = results.get("filtering")
+        query = results.get("query", {}) if isinstance(results.get("query"), dict) else {}
+        sort_value = query.get("sort")
 
         if filtering:
             native_total = filtering.get("native_total")
@@ -1215,6 +1225,9 @@ class ESSDiveClient:
             header += ":\n\n"
         else:
             header = f"Found {total} datasets. Showing {len(datasets)} results:\n\n"
+
+        if sort_value:
+            header += f"Sort: {sort_value}\n\n"
 
         if format_type == "summary":
             summary = header
@@ -1738,6 +1751,7 @@ def main():
         begin_date: Optional[str] = None,
         end_date: Optional[str] = None,
         keywords: Optional[Union[str, List[str]]] = None,
+        sort: Optional[str] = None,
         bbox: Optional[Union[str, List[float]]] = None,
         lat: Optional[float] = None,
         lon: Optional[float] = None,
@@ -1767,6 +1781,7 @@ def main():
             begin_date: Temporal coverage window start date (YYYY, YYYY-MM, or YYYY-MM-DD)
             end_date: Temporal coverage window end date (YYYY, YYYY-MM, or YYYY-MM-DD)
             keywords: Search for datasets with specific keywords (string or list of strings)
+            sort: Optional sort string, e.g. "name:asc" or "dateUploaded:desc,authorLastName:asc"
             bbox: Bounding box search as "min_lat,min_lon,max_lat,max_lon" or [min_lat, min_lon, max_lat, max_lon]
             lat: Latitude for point-based nearby search
             lon: Longitude for point-based nearby search
@@ -1789,6 +1804,7 @@ def main():
             search-datasets with query="soil carbon" and page_size=10
             search-datasets with creator="Smith" and provider_name="NGEE Arctic"
             search-datasets with begin_date="2020" and end_date="2021-06" and format="detailed"
+            search-datasets with query="soil carbon" and sort="name:asc"
             search-datasets with bbox=[34.0, -119.0, 35.0, -117.0]
             search-datasets with lat=37.7749 and lon=-122.4194 and radius=5000
             search-datasets with query="snowmelt" and creator_affiliation="Pennsylvania"
@@ -1798,12 +1814,13 @@ def main():
             Formatted search results
         """
         LOGGER.debug(
-            "Tool search-datasets called query=%r creator=%r provider_name=%r begin_date=%r end_date=%r bbox=%r lat=%r lon=%r radius=%r local_filters=%r row_start=%s page_size=%s format=%s",
+            "Tool search-datasets called query=%r creator=%r provider_name=%r begin_date=%r end_date=%r sort=%r bbox=%r lat=%r lon=%r radius=%r local_filters=%r row_start=%s page_size=%s format=%s",
             query,
             creator,
             provider_name,
             begin_date,
             end_date,
+            sort,
             bbox,
             lat,
             lon,
@@ -1862,6 +1879,7 @@ def main():
                 begin_date=begin_date,
                 end_date=end_date,
                 keywords=keywords_list,
+                sort=sort,
                 bbox=bbox,
                 lat=lat,
                 lon=lon,
@@ -1895,6 +1913,7 @@ def main():
                         "date_published": date_published,
                         "begin_date": begin_date,
                         "end_date": end_date,
+                        "sort": sort,
                         "bbox": bbox,
                         "lat": lat,
                         "lon": lon,

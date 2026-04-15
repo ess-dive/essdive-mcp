@@ -124,6 +124,7 @@ To remove them:
 ### `essdive-datasets`
 
 - `Use the essdive-datasets skill to find public ESS-DIVE datasets about wildfire recovery and summarize the top results.`
+- `Use the essdive-datasets skill to search for BIONTE datasets sorted by name ascending and summarize the first three.`
 - `Use the essdive-datasets skill to search for datasets inside the bounding box [38.9187, -106.9532, 38.9263, -106.9451] and summarize the matches.`
 - `Use the essdive-datasets skill to search for datasets within 100 meters of 38.8747, -76.5519 and summarize the matches.`
 - `Use the essdive-datasets skill to show the version history for DOI 10.15485/2529445 and summarize the newest two versions.`

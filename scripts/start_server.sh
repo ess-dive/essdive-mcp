@@ -12,14 +12,16 @@ if ! command -v uv >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ ! -f "$TOKEN_FILE" ]] || [[ ! -s "$TOKEN_FILE" ]]; then
-  echo "Token file not found at $TOKEN_FILE" >&2
-  echo "Create one with ./scripts/save_token.sh or set ESSDIVE_TOKEN_FILE." >&2
-  exit 1
+if [[ -f "$TOKEN_FILE" ]] && [[ -s "$TOKEN_FILE" ]]; then
+  echo "Starting essdive-mcp using token file: $TOKEN_FILE"
+  echo "The server will wait for an MCP client connection. Press Ctrl+C to stop."
+  echo
+  exec uv run essdive-mcp --token-file "$TOKEN_FILE"
 fi
 
-echo "Starting essdive-mcp using token file: $TOKEN_FILE"
+echo "No token file found at $TOKEN_FILE; starting essdive-mcp without ESS-DIVE auth."
+echo "Public dataset reads will work anonymously. Set ESSDIVE_API_TOKEN or create a token file if you need private-data access."
 echo "The server will wait for an MCP client connection. Press Ctrl+C to stop."
 echo
 
-exec uv run essdive-mcp --token-file "$TOKEN_FILE"
+exec uv run essdive-mcp

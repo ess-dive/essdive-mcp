@@ -44,21 +44,21 @@ These are the minimum prerequisites:
   The best installation option will depend on your system. Once installation is complete, run Goose Desktop to complete the next step.
 - Access to an LLM API that Goose Desktop can use.
   Examples include OpenAI, Anthropic, or LBNL's CBORG. If you plan to use CBORG, see [docs/CBORG_SETUP.md](docs/CBORG_SETUP.md). Goose will prompt you to provide LLM API details when you first run it. For more details and visual examples, see [docs/GOOSE_SETUP.md](docs/GOOSE_SETUP.md).
-- An ESS-DIVE API token.
-  Sign in at <https://data.ess-dive.lbl.gov>. This generally requires authenticating with your ORCID. Once you have done so, open your profile (upper right), then go to the `Settings` tab -> `Authentication Token`. Create a new token or click the `Renew authentication token` button if you need a new token. Copy this token to a safe place.
+- An ESS-DIVE API token if you need authenticated access to private data.
+  Public dataset search and retrieval no longer require a token. If you do need one, sign in at <https://data.ess-dive.lbl.gov>. This generally requires authenticating with your ORCID. Once you have done so, open your profile (upper right), then go to the `Settings` tab -> `Authentication Token`. Create a new token or click the `Renew authentication token` button if you need a new token. Copy this token to a safe place.
 
 
 ⚠️ Important:
 
 - Goose Desktop must already be configured with your LLM provider and API key before the ESS-DIVE MCP extension will be usable.
-- The ESS-DIVE environment variable name must be exactly `ESSDIVE_API_TOKEN`.
-- ESS-DIVE says API tokens expire after 24 hours, so if the server suddenly stops authenticating, generate a fresh token and update the extension.
+- If you configure an ESS-DIVE token, the environment variable name must be exactly `ESSDIVE_API_TOKEN`.
+- ESS-DIVE says API tokens expire after 24 hours, so if authenticated requests suddenly stop working, generate a fresh token and update the extension.
 
 ### Install in Goose Desktop
 
 This is the simplest setup if you want Goose to run `essdive-mcp` directly from GitHub without cloning this repository first:
 
-1. Install Python, `uv`, Goose Desktop, and get your ESS-DIVE token as described above.
+1. Install Python, `uv`, and Goose Desktop as described above. If you need private-data access, also get an ESS-DIVE token.
 2. Open Goose Desktop and configure your LLM provider.
 3. Add a new Extension for `essdive-mcp`.
    Use one of these commands:
@@ -78,11 +78,13 @@ uvx --from git+https://github.com/ess-dive/essdive-mcp essdive-mcp
    - macOS/Linux command: `uvx`
    - macOS/Linux arguments: `--from git+https://github.com/ess-dive/essdive-mcp essdive-mcp`
 
-4. Set the extension environment variable:
+4. If you need private-data access, set the extension environment variable:
 
 ```text
 ESSDIVE_API_TOKEN=YOUR_ESS_DIVE_TOKEN_HERE
 ```
+
+   For public dataset search and retrieval, you can leave the ESS-DIVE token unset.
 
 After you save the extension, start a chat in Goose and ask a simple ESS-DIVE question. If the extension is working, Goose should call ESS-DIVE MCP tools automatically without you needing to type a tool name, though it will likely ask you for permission to use the tool first.
 
@@ -171,7 +173,7 @@ If you want a fuller manual setup, more client options, or more example queries,
 This project gives an AI client a set of tools for:
 
 - searching public ESS-DIVE datasets
-- fetching dataset metadata and sharing permissions
+- fetching dataset metadata, version history, and sharing permissions
 - converting between ESS-DIVE dataset IDs and DOIs
 - parsing File Level Metadata (FLMD) CSV content
 - searching ESS-DeepDive field and file metadata
@@ -189,8 +191,8 @@ You do not need deep background knowledge to try this project.
 
 The simplest mental model is:
 
-1. Get an ESS-DIVE token.
-2. Start or register this MCP server.
+1. Start or register this MCP server.
+2. Optionally add an ESS-DIVE token if you need private-data access.
 3. Open your AI client.
 4. Ask questions in plain English.
 
@@ -303,7 +305,7 @@ If you prefer the manual command:
 uv sync
 ```
 
-### 4. Get an ESS-DIVE authentication token
+### 4. Optionally get an ESS-DIVE authentication token
 
 ESS-DIVE documents the token workflow in its Dataset API docs.
 
@@ -318,6 +320,8 @@ The easiest way to save it locally is:
 ```bash
 ./scripts/save_token.sh
 ```
+
+You only need this token if you want authenticated access, such as private datasets.
 
 Important:
 
@@ -338,16 +342,20 @@ The easiest way is:
 This script:
 
 - checks that `uv` is available
-- checks that your token file exists
-- starts the MCP server with that token file
+- starts the MCP server
+- uses `essdivetoken` automatically if that file exists
 
 If you prefer the manual command:
 
 ```bash
-uv run essdive-mcp --token-file ./essdivetoken
+uv run essdive-mcp
 ```
 
-(Note that this assumes you have saved your ESS-DIVE API token to a file named `essdivetoken`.)
+If you want authenticated/private-data access, you can still provide a token explicitly:
+
+```bash
+uv run essdive-mcp --token-file ./essdivetoken
+```
 
 What should happen:
 
@@ -363,7 +371,7 @@ Choose one of the following clients to use with the ESS-DIVE MCP server. Install
 If your preferred client is not listed here, look for that client's MCP server settings and configure it to run:
 
 ```bash
-uv run essdive-mcp --token-file ./essdivetoken
+uv run essdive-mcp
 ```
 
 Client Options:
@@ -386,12 +394,7 @@ Create a project-scoped MCP config at `.vscode/mcp.json`:
     "essdive-mcp": {
       "type": "stdio",
       "command": "uv",
-      "args": [
-        "run",
-        "essdive-mcp",
-        "--token-file",
-        "${workspaceFolder}/essdivetoken"
-      ]
+      "args": ["run", "essdive-mcp"]
     }
   }
 }
@@ -406,7 +409,7 @@ Then:
 5. Switch the chat mode to `Agent`.
 6. Open the tools list and confirm `essdive-mcp` is available.
 
-If you prefer not to keep the token in a file, you can use an environment variable instead:
+If you need authenticated/private-data access, you can add a token with an environment variable instead:
 
 ```json
 {
@@ -429,7 +432,7 @@ Register the server:
 
 ```bash
 claude mcp add --transport stdio essdive-mcp -- \
-  uv run essdive-mcp --token-file ./essdivetoken
+  uv run essdive-mcp
 ```
 
 Then check it:
@@ -444,6 +447,7 @@ Notes:
 
 - `--transport`, `--scope`, and `--env` flags must come before the server name.
 - Use `--scope project` if you want to share the server config with others in this repository.
+- Add `--env ESSDIVE_API_TOKEN=...` if you need authenticated/private-data access.
 
 ### Codex
 
@@ -451,7 +455,7 @@ Register the server:
 
 ```bash
 codex mcp add essdive-mcp -- \
-  uv run essdive-mcp --token-file ./essdivetoken
+  uv run essdive-mcp
 ```
 
 Or add it manually to `~/.codex/config.toml`:
@@ -459,8 +463,10 @@ Or add it manually to `~/.codex/config.toml`:
 ```toml
 [mcp_servers.essdive-mcp]
 command = "uv"
-args = ["run", "essdive-mcp", "--token-file", "/absolute/path/to/essdivetoken"]
+args = ["run", "essdive-mcp"]
 ```
+
+If you need authenticated/private-data access, add `ESSDIVE_API_TOKEN` to your Codex MCP server environment or pass `--token-file`.
 
 Then confirm it:
 
@@ -483,17 +489,17 @@ For a Goose Desktop extension that runs directly from GitHub without cloning thi
 - Windows arguments: `--from git+https://github.com/ess-dive/essdive-mcp essdive-mcp`
 - macOS/Linux command: `uvx`
 - macOS/Linux arguments: `--from git+https://github.com/ess-dive/essdive-mcp essdive-mcp`
-- Environment: `ESSDIVE_API_TOKEN=YOUR_ESS_DIVE_TOKEN_HERE`
+- Environment: optional `ESSDIVE_API_TOKEN=YOUR_ESS_DIVE_TOKEN_HERE`
 - Timeout: `300`
 
 If you already cloned this repository and want Goose to run your local checkout instead, add a custom STDIO extension with:
 
 - Name: `essdive-mcp`
 - Command: `uv`
-- Arguments: `run essdive-mcp --token-file /absolute/path/to/essdivetoken`
+- Arguments: `run essdive-mcp`
 - Timeout: `300`
 
-If you prefer environment variables, set:
+If you need authenticated/private-data access, set:
 
 - `ESSDIVE_API_TOKEN=YOUR_ESS_DIVE_TOKEN_HERE`
 
@@ -506,6 +512,7 @@ Start with plain natural-language prompts. You do not need to call tool names di
 Try prompts like:
 
 - `Find public ESS-DIVE datasets about soil carbon and summarize the top five results.`
+- `Find public ESS-DIVE datasets about BIONTE sorted by name ascending.`
 - `Search ESS-DIVE for datasets inside the bounding box [38.9187, -106.9532, 38.9263, -106.9451].`
 - `Search ESS-DIVE for datasets within 100 meters of 38.8747, -76.5519 and summarize the results.`
 - `Find ESS-DIVE datasets published in 2024 about wildfire recovery.`
@@ -514,6 +521,7 @@ Try prompts like:
 ### Dataset details and permissions
 
 - `Get the metadata for ESS-DIVE dataset ess-dive-165671432ae620e-20250908T210722395.`
+- `Show the version history for DOI 10.15485/2529445 and tell me what changed most recently.`
 - `Show the sharing permissions for ESS-DIVE dataset ess-dive-165671432ae620e-20250908T210722395.`
 
 ### Identifier conversion
@@ -709,6 +717,8 @@ If your client supports direct tool calling, these examples map closely to the a
 
 ```text
 search-datasets with query="wildfire recovery" and page_size=5
+search-datasets with query="BIONTE" and sort="name:asc" and page_size=3
+search-datasets with query="BIONTE" and sort="name:asc" and cursor="PASTE_NEXT_CURSOR_HERE"
 search-datasets with begin_date="2020" and end_date="2021" and format="detailed"
 search-datasets with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
 search-datasets with lat=38.8747 and lon=-76.5519 and radius=100
@@ -716,6 +726,8 @@ search-datasets with query="East River" and creator_affiliation="Lawrence Berkel
 search-datasets with query="East River" and variable_measured="streamflow" and page_size=5
 search-datasets with query="East River" and funder="NASA" and page_size=5
 get-dataset with id="ess-dive-165671432ae620e-20250908T210722395"
+get-dataset-versions with id="doi:10.15485/2529445" and page_size=2
+get-dataset-versions with id="doi:10.15485/2529445" and cursor="PASTE_NEXT_CURSOR_HERE"
 get-dataset-permissions with id="ess-dive-165671432ae620e-20250908T210722395"
 doi-to-essdive-id with doi="10.15485/2587853"
 essdive-id-to-doi with essdive_id="ess-dive-165671432ae620e-20250908T210722395"
@@ -753,7 +765,7 @@ If you want the simplest way to try these Skills in Goose Desktop, use Goose's s
 What you need first:
 
 - Goose Desktop installed and configured with an LLM provider
-- an ESS-DIVE API token available for ESS-DIVE queries
+- an ESS-DIVE API token if you need authenticated/private-data ESS-DIVE queries
 
 You do not need Python or `uv` just to install the Skill files themselves.
 
@@ -832,6 +844,9 @@ You can ask for a Skill by name, or let the agent choose it when relevant.
 Examples:
 
 - `Use the essdive-datasets skill to find recent wildfire-related datasets and then fetch the metadata for the best match.`
+- `Use the essdive-datasets skill to search for BIONTE datasets sorted by name ascending and summarize the first three.`
+- `Use the essdive-datasets skill to search for BIONTE datasets, then continue to the next page with the returned cursor.`
+- `Use the essdive-datasets skill to list the version history for DOI 10.15485/2529445 and summarize the newest two versions.`
 - `Use the essdive-identifiers skill to normalize DOI https://doi.org/10.15485/2587853 and return the ESS-DIVE ID.`
 - `Use the essdeepdive skill to search for temperature fields and tell me which data file each result comes from.`
 
@@ -887,6 +902,7 @@ and the observed values range from 19.1 to 26.9 C.
 
 - `search-datasets`
 - `get-dataset`
+- `get-dataset-versions`
 - `get-dataset-permissions`
 - `parse-flmd-file`
 
@@ -911,13 +927,13 @@ and the observed values range from 19.1 to 26.9 C.
 
 ## Command-Line Options
 
-- `--token`, `-t`: provide an ESS-DIVE API token directly
-- `--token-file`: read the token from a file
+- `--token`, `-t`: provide an optional ESS-DIVE API token directly
+- `--token-file`: read an optional ESS-DIVE API token from a file
 - `--verbose`, `-v`: enable debug logging and include tracebacks in tool error responses
 
 ## Environment Variables
 
-- `ESSDIVE_API_TOKEN`: ESS-DIVE API token
+- `ESSDIVE_API_TOKEN`: optional ESS-DIVE API token for authenticated/private-data access
 - `ESSDIVE_MCP_VERBOSE`: set to `1`, `true`, `yes`, or `on` for verbose diagnostics
 
 ## Testing
@@ -928,7 +944,13 @@ Run unit tests:
 uv run pytest tests/ -m "not integration"
 ```
 
-Run live integration tests:
+Run live integration tests for public anonymous access:
+
+```bash
+uv run pytest tests/integration -m integration
+```
+
+To also run authenticated ESS-DIVE integration coverage, set:
 
 ```bash
 export ESSDIVE_API_TOKEN="YOUR_ESS_DIVE_TOKEN_HERE"
@@ -948,15 +970,19 @@ Check:
 1. the server is registered correctly
 2. the server is started
 3. your client is in agent mode if required
-4. your token is valid
+4. if you need private-data access, your token is valid
 
 ### I get an authentication error
 
-Refresh your ESS-DIVE token and try again. ESS-DIVE says tokens expire after 24 hours.
+Public dataset reads should not require a token. If authenticated/private-data requests fail, refresh your ESS-DIVE token and try again. ESS-DIVE says tokens expire after 24 hours.
 
-### I set an environment variable but the server still fails
+### I set an environment variable but authenticated requests still fail
 
 The variable name must be exactly `ESSDIVE_API_TOKEN`.
+
+### I don't see all the results I expect from a dataset search
+
+Search results will depend upon your access to private data. Datasets you do not have access to will not appear in search results. Check on the validity of your ESS-DIVE token if you are using one (see the previous two issues), verify that the entries you expect to see are either public or you have access to them, and re-try the search.
 
 ### I am at LBNL and want to use CBORG-backed models
 

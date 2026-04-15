@@ -39,6 +39,157 @@ def _download_prefix(url: str, bytes_to_read: int) -> tuple[int, str, bytes]:
 
 
 @pytest.mark.asyncio
+async def test_get_public_dataset_by_id_live_without_token(
+    essdive_dataset_examples: list[dict[str, str]],
+):
+    """Public ESS-DIVE datasets should be retrievable without authentication."""
+    client = ESSDiveClient()
+    example = essdive_dataset_examples[0]
+
+    response = await client.get_dataset(example["id"])
+
+    assert response["id"] == example["id"]
+    assert response.get("isPublic") is True
+    assert response.get("viewUrl")
+
+
+@pytest.mark.asyncio
+async def test_get_dataset_versions_live_without_token(
+    essdive_dataset_examples: list[dict[str, str]],
+):
+    """Public dataset version history should be retrievable without authentication."""
+    client = ESSDiveClient()
+    example = essdive_dataset_examples[0]
+
+    response = await client.get_dataset_versions(example["doi"], page_size=2)
+
+    assert isinstance(response, dict)
+    assert response["total"] >= 1
+    assert response["pageSize"] == 2
+    assert isinstance(response["result"], list)
+    assert len(response["result"]) >= 1
+    assert all(item["dataset"]["@id"] == example["doi"]
+               for item in response["result"])
+    assert all(item.get("viewUrl") for item in response["result"])
+
+
+@pytest.mark.asyncio
+async def test_get_dataset_versions_live_cursor_pagination_without_token(
+    essdive_dataset_examples: list[dict[str, str]],
+):
+    """Version-history cursors should fetch a later page of older versions."""
+    client = ESSDiveClient()
+    example = essdive_dataset_examples[0]
+
+    first_page = await client.get_dataset_versions(example["doi"], page_size=2)
+    next_cursor = first_page.get("nextCursor")
+    if not next_cursor:
+        pytest.skip("Fixture dataset no longer spans multiple version pages.")
+
+    second_page = await client.get_dataset_versions(example["doi"], cursor=next_cursor)
+
+    first_ids = {item["id"] for item in first_page["result"]}
+    second_ids = {item["id"] for item in second_page["result"]}
+
+    assert second_page["previousCursor"] is not None
+    assert second_ids
+    assert second_ids.isdisjoint(first_ids)
+    assert all(item["dataset"]["@id"] == example["doi"]
+               for item in second_page["result"])
+
+
+@pytest.mark.asyncio
+async def test_search_public_datasets_live_without_token(
+    essdive_search_examples: list[dict[str, Any]],
+):
+    """Anonymous callers should be able to search public ESS-DIVE datasets."""
+    client = ESSDiveClient()
+    example = essdive_search_examples[0]
+
+    response = await client.search_datasets(
+        text=str(example["query"]),
+        begin_date=example.get("begin_date"),
+        end_date=example.get("end_date"),
+        bbox=example.get("bbox"),
+        lat=example.get("lat"),
+        lon=example.get("lon"),
+        radius=example.get("radius"),
+        is_public=True,
+        page_size=int(example.get("page_size", 10)),
+    )
+
+    assert isinstance(response, dict)
+    assert response["total"] > 0
+    assert isinstance(response["result"], list)
+    assert str(example["expected_id"]) in {
+        item["id"] for item in response["result"]}
+
+
+@pytest.mark.asyncio
+async def test_search_public_datasets_live_sorting_without_token():
+    """Anonymous callers should be able to request supported API sort orders."""
+    client = ESSDiveClient()
+
+    response = await client.search_datasets(
+        text="BIONTE",
+        is_public=True,
+        page_size=3,
+        sort="name:asc",
+    )
+
+    assert isinstance(response, dict)
+    assert response["query"]["sort"] == "name:asc"
+    assert len(response["result"]) >= 2
+
+    names = [item["dataset"]["name"] for item in response["result"]]
+    assert names == sorted(names, key=str.casefold)
+
+
+@pytest.mark.asyncio
+async def test_search_public_datasets_live_cursor_pagination_without_token():
+    """Search results should support cursor-based pagination without authentication."""
+    client = ESSDiveClient()
+
+    first_page = await client.search_datasets(
+        text="BIONTE",
+        is_public=True,
+        page_size=2,
+        sort="name:asc",
+    )
+
+    next_cursor = first_page.get("nextCursor")
+    if not next_cursor:
+        pytest.skip("Search fixture no longer spans multiple result pages.")
+
+    second_page = await client.search_datasets(
+        text="BIONTE",
+        is_public=True,
+        sort="name:asc",
+        cursor=next_cursor,
+    )
+
+    first_ids = {item["id"] for item in first_page["result"]}
+    second_ids = {item["id"] for item in second_page["result"]}
+
+    assert second_page["previousCursor"] is not None
+    assert second_ids
+    assert second_ids.isdisjoint(first_ids)
+    assert second_page["query"]["sort"] == "name:asc"
+    assert second_page["query"]["text"] == "BIONTE"
+
+
+def test_doi_to_essdive_id_live_without_token(
+    essdive_dataset_examples: list[dict[str, str]],
+):
+    """Public DOI resolution should work without authentication."""
+    example = essdive_dataset_examples[0]
+
+    resolved_id = doi_to_essdive_id(example["doi"])
+
+    assert resolved_id == example["id"]
+
+
+@pytest.mark.asyncio
 async def test_get_dataset_by_id_live(
     essdive_api_token: str,
     essdive_dataset_examples: list[dict[str, str]],

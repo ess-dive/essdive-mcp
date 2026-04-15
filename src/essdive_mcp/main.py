@@ -14,6 +14,8 @@ MCP Tools Available:
     records. Supports pagination and multiple result formats.
   - get-dataset: Retrieve detailed metadata for a specific dataset including creators,
     keywords, description, and available data files.
+  - get-dataset-versions: List visible versions of a dataset from newest to oldest,
+    with cursor-based pagination support for version history navigation.
   - get-dataset-permissions: Get sharing and access permission information for datasets.
 
 **Identifier Conversion:**
@@ -41,7 +43,9 @@ MCP Tools Available:
   - coords-to-map-links: Convert points or a bounding box to viewable map links (e.g., geojson.io).
 
 Authentication:
-  API token can be provided via --token, --token-file, or ESSDIVE_API_TOKEN.
+  Public dataset reads do not require authentication. An API token can still be
+  provided via --token, --token-file, or ESSDIVE_API_TOKEN for authenticated
+  requests such as private-data access.
 """
 import asyncio
 import os
@@ -212,6 +216,11 @@ def _context_without_none(context: Dict[str, Any]) -> Dict[str, Any]:
     return {key: value for key, value in context.items() if value is not None}
 
 
+def _default_dataset_search_is_public(api_token: Optional[str]) -> Optional[bool]:
+    """Use public-only search anonymously; allow private matches when authenticated."""
+    return True if not api_token else None
+
+
 def _is_essdive_empty_search_response(response: httpx.Response) -> bool:
     """Return True when ESS-DIVE encodes an empty search result as HTTP 404."""
     if response.status_code != 404:
@@ -231,8 +240,9 @@ def _is_essdive_empty_search_response(response: httpx.Response) -> bool:
 
 def _empty_dataset_search_result(
     *,
-    row_start: int,
-    page_size: int,
+    row_start: Optional[int],
+    page_size: Optional[int],
+    cursor: Optional[str],
     is_public: Optional[bool],
     creator: Optional[str],
     provider_name: Optional[str],
@@ -241,16 +251,15 @@ def _empty_dataset_search_result(
     begin_date: Optional[str],
     end_date: Optional[str],
     keywords: Optional[List[str]],
+    sort: Optional[str],
     bbox: Optional[str],
     lat: Optional[float],
     lon: Optional[float],
     radius: Optional[float],
 ) -> Dict[str, Any]:
     """Return a stable empty search payload when the API reports no matches."""
-    return {
+    payload = {
         "total": 0,
-        "pageSize": page_size,
-        "rowStart": row_start,
         "result": [],
         "query": {
             "isPublic": is_public,
@@ -261,12 +270,19 @@ def _empty_dataset_search_result(
             "beginDate": begin_date,
             "endDate": end_date,
             "keywords": keywords,
+            "sort": sort,
+            "cursor": cursor,
             "bbox": bbox,
             "lat": lat,
             "lon": lon,
             "radius": radius,
         },
     }
+    if page_size is not None:
+        payload["pageSize"] = page_size
+    if row_start is not None:
+        payload["rowStart"] = row_start
+    return payload
 
 
 def _run_in_new_event_loop(awaitable: Awaitable[T]) -> T:
@@ -943,8 +959,9 @@ class ESSDiveClient:
 
     async def search_datasets(
         self,
-        row_start: int = 1,
-        page_size: int = 25,
+        row_start: Optional[int] = None,
+        page_size: Optional[int] = None,
+        cursor: Optional[str] = None,
         is_public: Optional[bool] = None,
         creator: Optional[str] = None,
         provider_name: Optional[str] = None,
@@ -953,6 +970,7 @@ class ESSDiveClient:
         begin_date: Optional[str] = None,
         end_date: Optional[str] = None,
         keywords: Optional[List[str]] = None,
+        sort: Optional[str] = None,
         bbox: Optional[Union[str, List[float]]] = None,
         lat: Optional[float] = None,
         lon: Optional[float] = None,
@@ -962,8 +980,9 @@ class ESSDiveClient:
         Search for datasets using the ESS-DIVE API.
 
         Args:
-            row_start: The row number to start on (for pagination)
+            row_start: Legacy row number to start on (for pagination)
             page_size: Number of results per page (max 100)
+            cursor: Opaque cursor for follow-up pages of search results
             is_public: If True, only return public packages
             creator: Filter by dataset creator
             provider_name: Filter by dataset project/provider
@@ -972,6 +991,7 @@ class ESSDiveClient:
             begin_date: Filter by temporal coverage window start date
             end_date: Filter by temporal coverage window end date
             keywords: Search for datasets with specific keywords
+            sort: Sort order such as "name:asc" or "dateUploaded:desc,authorLastName:asc"
             bbox: Bounding box filter as "min_lat,min_lon,max_lat,max_lon" or [min_lat, min_lon, max_lat, max_lon]
             lat: Latitude for point-based nearby search
             lon: Longitude for point-based nearby search
@@ -983,10 +1003,14 @@ class ESSDiveClient:
         Examples:
             await client.search_datasets(text="soil carbon", page_size=5, is_public=True)
             await client.search_datasets(provider_name="NGEE Arctic", row_start=1, page_size=10)
+            await client.search_datasets(text="soil carbon", cursor="opaque-cursor")
             await client.search_datasets(begin_date="2020", end_date="2021-06")
+            await client.search_datasets(text="soil carbon", sort="name:asc")
             await client.search_datasets(bbox=[34.0, -119.0, 35.0, -117.0])
         """
         params: Dict[str, Any] = {}
+        effective_row_start = 1 if row_start is None else row_start
+        effective_page_size = 25 if page_size is None else page_size
         normalized_bbox = _validate_dataset_search_spatial_params(
             bbox=bbox,
             lat=lat,
@@ -994,9 +1018,14 @@ class ESSDiveClient:
             radius=radius,
         )
 
-        # Always include pagination parameters
-        params["rowStart"] = row_start
-        params["pageSize"] = page_size
+        # Cursor pagination supersedes legacy rowStart pagination.
+        if cursor:
+            params["cursor"] = cursor
+            if page_size is not None:
+                params["pageSize"] = page_size
+        else:
+            params["rowStart"] = effective_row_start
+            params["pageSize"] = effective_page_size
 
         # Add optional parameters if provided
         if is_public is not None:
@@ -1015,6 +1044,8 @@ class ESSDiveClient:
             params["endDate"] = end_date
         if keywords:
             params["keywords"] = keywords
+        if sort:
+            params["sort"] = sort
         if normalized_bbox:
             params["bbox"] = normalized_bbox
         if lat is not None:
@@ -1038,8 +1069,9 @@ class ESSDiveClient:
                         "converting to an empty result set"
                     )
                     return _empty_dataset_search_result(
-                        row_start=row_start,
-                        page_size=page_size,
+                        row_start=None if cursor else effective_row_start,
+                        page_size=page_size if cursor else effective_page_size,
+                        cursor=cursor,
                         is_public=is_public,
                         creator=creator,
                         provider_name=provider_name,
@@ -1048,6 +1080,7 @@ class ESSDiveClient:
                         begin_date=begin_date,
                         end_date=end_date,
                         keywords=keywords,
+                        sort=sort,
                         bbox=normalized_bbox,
                         lat=lat,
                         lon=lon,
@@ -1083,6 +1116,57 @@ class ESSDiveClient:
         result = await self._get_json(url)
         LOGGER.debug("ESS-DIVE get dataset response id=%s",
                      result.get("id"))
+        return result
+
+    async def get_dataset_versions(
+        self,
+        identifier: str,
+        page_size: Optional[int] = None,
+        cursor: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        List visible versions of a dataset from newest to oldest.
+
+        Args:
+            identifier: The ESS-DIVE unique identifier or DOI
+            page_size: Optional number of versions to return (API default: 10, max: 10)
+            cursor: Optional opaque cursor from a previous versions response
+
+        Returns:
+            API response containing dataset versions and pagination cursors
+
+        Examples:
+            await client.get_dataset_versions("doi:10.15485/2453885", page_size=5)
+            await client.get_dataset_versions(
+                "ess-dive-9ea5fe57db73c90-20241024T093714082510",
+                cursor="opaque-cursor",
+            )
+        """
+        params: Dict[str, Any] = {}
+        if page_size is not None:
+            params["pageSize"] = page_size
+        if cursor:
+            params["cursor"] = cursor
+
+        url = self._package_url(identifier, "/versions")
+        LOGGER.debug(
+            "ESS-DIVE get dataset versions request url=%s params=%s", url, params)
+
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
+            response = await client.get(
+                url,
+                params=params or None,
+                headers=self._get_headers(),
+            )
+            response.raise_for_status()
+            result = response.json()
+
+        LOGGER.debug(
+            "ESS-DIVE get dataset versions response total=%s count=%s",
+            result.get("total"),
+            len(result.get("result", [])) if isinstance(
+                result, dict) else "n/a",
+        )
         return result
 
     async def get_dataset_status(self, identifier: str) -> Dict[str, Any]:
@@ -1149,6 +1233,10 @@ class ESSDiveClient:
         datasets = results["result"]
         total = results.get("total", 0)
         filtering = results.get("filtering")
+        query = results.get("query", {}) if isinstance(
+            results.get("query"), dict) else {}
+        sort_value = query.get("sort")
+        has_cursor_pagination = "nextCursor" in results or "previousCursor" in results
 
         if filtering:
             native_total = filtering.get("native_total")
@@ -1162,6 +1250,14 @@ class ESSDiveClient:
             header += ":\n\n"
         else:
             header = f"Found {total} datasets. Showing {len(datasets)} results:\n\n"
+
+        if sort_value:
+            header += f"Sort: {sort_value}\n\n"
+        if has_cursor_pagination:
+            header += (
+                f"Pagination: previousCursor={results.get('previousCursor') or 'None'}; "
+                f"nextCursor={results.get('nextCursor') or 'None'}\n\n"
+            )
 
         if format_type == "summary":
             summary = header
@@ -1223,7 +1319,8 @@ class ESSDiveClient:
                 if variables:
                     detailed += f"   Variables Measured: {', '.join(variables[:6])}\n"
 
-                techniques = _as_string_list(ds_data.get("measurementTechnique"))
+                techniques = _as_string_list(
+                    ds_data.get("measurementTechnique"))
                 if techniques:
                     detailed += (
                         f"   Measurement Techniques: "
@@ -1244,6 +1341,98 @@ class ESSDiveClient:
                     detailed += f"   License: {license_value}\n"
 
                 if i < len(datasets):
+                    detailed += "\n"
+
+            return detailed
+
+        return results
+
+    def format_dataset_versions(
+        self, results: Dict[str, Any], format_type: str = "summary"
+    ) -> Union[str, Dict[str, Any]]:
+        """
+        Format dataset version history into a readable summary.
+
+        Args:
+            results: The API response to format
+            format_type: Type of formatting ('summary', 'detailed', 'raw')
+
+        Returns:
+            Formatted version history as string or dict
+        """
+        if format_type == "raw":
+            return results
+
+        if "result" not in results:
+            return "No version history found or invalid response format."
+
+        versions = results["result"]
+        total = results.get("total", 0)
+        header = (
+            f"Found {total} visible dataset versions. "
+            f"Showing {len(versions)} results from newest to oldest:\n"
+        )
+
+        pagination = (
+            "\nPagination:\n"
+            f"  previousCursor: {results.get('previousCursor') or 'None'}\n"
+            f"  nextCursor: {results.get('nextCursor') or 'None'}\n\n"
+        )
+
+        if format_type == "summary":
+            summary = header + pagination
+
+            for i, version in enumerate(versions, 1):
+                dataset = version.get("dataset", {})
+                doi = dataset.get("@id") or dataset.get("doi")
+                summary += f"{i}. {dataset.get('name', 'Untitled')}\n"
+                summary += f"   ID: {version.get('id', 'Unknown')}\n"
+                if doi:
+                    summary += f"   DOI: {doi}\n"
+                summary += f"   Uploaded: {version.get('dateUploaded', 'Unknown')}\n"
+                summary += f"   Published: {dataset.get('datePublished', 'Unknown')}\n"
+                summary += f"   URL: {version.get('viewUrl', 'Unknown')}\n"
+                if i < len(versions):
+                    summary += "\n"
+
+            return summary
+
+        if format_type == "detailed":
+            detailed = header + pagination
+
+            for i, version in enumerate(versions, 1):
+                dataset = version.get("dataset", {})
+                doi = dataset.get("@id") or dataset.get("doi")
+                detailed += f"{i}. {dataset.get('name', 'Untitled')}\n"
+                detailed += f"   ID: {version.get('id', 'Unknown')}\n"
+                if doi:
+                    detailed += f"   DOI: {doi}\n"
+                detailed += f"   Uploaded: {version.get('dateUploaded', 'Unknown')}\n"
+                detailed += f"   Modified: {version.get('dateModified', 'Unknown')}\n"
+                detailed += f"   Published: {dataset.get('datePublished', 'Unknown')}\n"
+                detailed += f"   Public: {version.get('isPublic', 'Unknown')}\n"
+                detailed += f"   View URL: {version.get('viewUrl', 'Unknown')}\n"
+                detailed += f"   API URL: {version.get('url', 'Unknown')}\n"
+
+                description = dataset.get("description", "")
+                if isinstance(description, list):
+                    description = " ".join(description)
+                if description:
+                    detailed += (
+                        f"   Description: {description[:300]}"
+                        f"{'...' if len(description) > 300 else ''}\n"
+                    )
+
+                citation = version.get("citation")
+                if citation:
+                    detailed += f"   Citation: {citation}\n"
+
+                if version.get("next"):
+                    detailed += f"   Newer Version URL: {version['next']}\n"
+                if version.get("previous"):
+                    detailed += f"   Older Version URL: {version['previous']}\n"
+
+                if i < len(versions):
                     detailed += "\n"
 
             return detailed
@@ -1518,19 +1707,16 @@ def _summarize_essdeepdive_file_response(result: Dict[str, Any]) -> Dict[str, An
 
 def get_api_key(
     api_key: Optional[str] = None, token_file: Optional[str] = None
-) -> str:
+) -> Optional[str]:
     """
-    Get ESS-DIVE API key from parameter, token file, or environment variable.
+    Get an optional ESS-DIVE API token from a parameter, token file, or environment.
 
     Args:
         api_key: Optional API key provided directly.
         token_file: Optional path to a file containing the API key.
 
     Returns:
-        The API key string.
-
-    Raises:
-        ValueError: If no API key is provided or found in environment.
+        The API key string, or None when no token is configured.
     """
     if api_key is None and token_file:
         try:
@@ -1544,12 +1730,22 @@ def get_api_key(
     if not api_key:
         api_key = os.getenv("ESSDIVE_API_TOKEN")
 
-    if not api_key:
-        raise ValueError(
-            "ESS-DIVE API key is required. Provide it with --token, --token-file, or set ESSDIVE_API_TOKEN."
-        )
+    return api_key or None
 
-    return api_key
+
+def _resolve_startup_api_token(
+    api_key: Optional[str] = None,
+    token_file: Optional[str] = None,
+) -> Optional[str]:
+    """Resolve startup auth config, falling back to anonymous mode on file errors."""
+    try:
+        return get_api_key(api_key, token_file=token_file)
+    except ValueError as exc:
+        LOGGER.warning(
+            "%s Starting without ESS-DIVE auth; public dataset reads will still work.",
+            exc,
+        )
+        return None
 
 
 def main():
@@ -1559,11 +1755,11 @@ def main():
     parser.add_argument(
         "--token",
         "-t",
-        help="ESS-DIVE API token for authenticated requests (can also use ESSDIVE_API_TOKEN env var)",
+        help="Optional ESS-DIVE API token for authenticated/private-data requests (can also use ESSDIVE_API_TOKEN env var)",
     )
     parser.add_argument(
         "--token-file",
-        help="Path to a file containing the ESS-DIVE API token",
+        help="Path to a file containing an optional ESS-DIVE API token",
     )
     parser.add_argument(
         "--verbose",
@@ -1576,13 +1772,13 @@ def main():
     verbose_mode = args.verbose or _is_truthy(os.getenv("ESSDIVE_MCP_VERBOSE"))
     _configure_logging(verbose_mode)
 
-    # Get and validate API token
-    try:
-        api_token = get_api_key(args.token, token_file=args.token_file)
-    except ValueError as exc:
-        parser.error(str(exc))
+    api_token = _resolve_startup_api_token(args.token, token_file=args.token_file)
 
-    LOGGER.info("Starting ESS-DIVE MCP server (verbose=%s)", verbose_mode)
+    LOGGER.info(
+        "Starting ESS-DIVE MCP server (verbose=%s, authenticated=%s)",
+        verbose_mode,
+        bool(api_token),
+    )
 
     # Create a FastMCP server
     server = FastMCP("essdive_mcp")
@@ -1600,6 +1796,7 @@ def main():
         begin_date: Optional[str] = None,
         end_date: Optional[str] = None,
         keywords: Optional[Union[str, List[str]]] = None,
+        sort: Optional[str] = None,
         bbox: Optional[Union[str, List[float]]] = None,
         lat: Optional[float] = None,
         lon: Optional[float] = None,
@@ -1614,8 +1811,9 @@ def main():
         file_format: Optional[Union[str, List[str]]] = None,
         file_name: Optional[Union[str, List[str]]] = None,
         file_url: Optional[Union[str, List[str]]] = None,
-        row_start: int = 1,
-        page_size: int = 25,
+        cursor: Optional[str] = None,
+        row_start: Optional[int] = None,
+        page_size: Optional[int] = None,
         format: str = "summary",
     ) -> str:
         """
@@ -1629,6 +1827,7 @@ def main():
             begin_date: Temporal coverage window start date (YYYY, YYYY-MM, or YYYY-MM-DD)
             end_date: Temporal coverage window end date (YYYY, YYYY-MM, or YYYY-MM-DD)
             keywords: Search for datasets with specific keywords (string or list of strings)
+            sort: Optional sort string, e.g. "name:asc" or "dateUploaded:desc,authorLastName:asc"
             bbox: Bounding box search as "min_lat,min_lon,max_lat,max_lon" or [min_lat, min_lon, max_lat, max_lon]
             lat: Latitude for point-based nearby search
             lon: Longitude for point-based nearby search
@@ -1643,14 +1842,17 @@ def main():
             file_format: Local post-filter on distribution encodingFormat values
             file_name: Local post-filter on distribution file names
             file_url: Local post-filter on distribution content URLs
-            row_start: The row number to start on (for pagination)
-            page_size: Number of results per page
+            cursor: Opaque cursor for a follow-up page of search results
+            row_start: Legacy row number to start on when not using cursor pagination
+            page_size: Number of results per page; omit on cursor follow-up unless it matches the cursor
             format: Format of the results (summary, detailed, raw)
 
         Examples:
             search-datasets with query="soil carbon" and page_size=10
             search-datasets with creator="Smith" and provider_name="NGEE Arctic"
             search-datasets with begin_date="2020" and end_date="2021-06" and format="detailed"
+            search-datasets with query="soil carbon" and sort="name:asc"
+            search-datasets with query="BIONTE" and cursor="opaque-cursor"
             search-datasets with bbox=[34.0, -119.0, 35.0, -117.0]
             search-datasets with lat=37.7749 and lon=-122.4194 and radius=5000
             search-datasets with query="snowmelt" and creator_affiliation="Pennsylvania"
@@ -1660,12 +1862,14 @@ def main():
             Formatted search results
         """
         LOGGER.debug(
-            "Tool search-datasets called query=%r creator=%r provider_name=%r begin_date=%r end_date=%r bbox=%r lat=%r lon=%r radius=%r local_filters=%r row_start=%s page_size=%s format=%s",
+            "Tool search-datasets called query=%r creator=%r provider_name=%r begin_date=%r end_date=%r sort=%r cursor=%r bbox=%r lat=%r lon=%r radius=%r local_filters=%r row_start=%s page_size=%s format=%s",
             query,
             creator,
             provider_name,
             begin_date,
             end_date,
+            sort,
+            cursor,
             bbox,
             lat,
             lon,
@@ -1716,7 +1920,8 @@ def main():
             result = await client.search_datasets(
                 row_start=row_start,
                 page_size=page_size,
-                is_public=True,
+                cursor=cursor,
+                is_public=_default_dataset_search_is_public(client.api_token),
                 creator=creator,
                 provider_name=provider_name,
                 text=text,
@@ -1724,6 +1929,7 @@ def main():
                 begin_date=begin_date,
                 end_date=end_date,
                 keywords=keywords_list,
+                sort=sort,
                 bbox=bbox,
                 lat=lat,
                 lon=lon,
@@ -1757,6 +1963,8 @@ def main():
                         "date_published": date_published,
                         "begin_date": begin_date,
                         "end_date": end_date,
+                        "sort": sort,
+                        "cursor": cursor,
                         "bbox": bbox,
                         "lat": lat,
                         "lon": lon,
@@ -1863,7 +2071,8 @@ def main():
                     content += f"- {location}\n"
                 content += "\n"
 
-            variables_measured = _as_string_list(dataset.get("variableMeasured"))
+            variables_measured = _as_string_list(
+                dataset.get("variableMeasured"))
             if variables_measured:
                 content += "## Variables Measured\n"
                 content += ", ".join(variables_measured)
@@ -1881,7 +2090,8 @@ def main():
             funders = []
             for funder in _as_list(dataset.get("funder")):
                 if isinstance(funder, dict):
-                    funder_name = ", ".join(_organization_search_strings(funder))
+                    funder_name = ", ".join(
+                        _organization_search_strings(funder))
                     if funder_name:
                         funders.append(funder_name)
                 else:
@@ -1924,6 +2134,69 @@ def main():
                 exc,
                 verbose=verbose_mode,
                 context={"id": id},
+            )
+
+    @server.tool(
+        name="get-dataset-versions",
+        description="List visible versions of a specific dataset from newest to oldest",
+    )
+    async def get_dataset_versions_tool(
+        id: str,
+        page_size: Optional[int] = None,
+        cursor: Optional[str] = None,
+        format: str = "summary",
+    ) -> str:
+        """
+        List visible versions for a dataset from newest to oldest.
+
+        Args:
+            id: ESS-DIVE dataset identifier or DOI
+            page_size: Optional number of versions to return (API default: 10, max: 10)
+            cursor: Optional opaque cursor from a previous versions response
+            format: Format of the results (summary, detailed, raw)
+
+        Examples:
+            get-dataset-versions with id="doi:10.15485/2529445"
+            get-dataset-versions with id="doi:10.15485/2529445" and page_size=2
+            get-dataset-versions with id="doi:10.15485/2529445" and cursor="opaque-cursor"
+
+        Returns:
+            Formatted dataset version history
+        """
+        LOGGER.debug(
+            "Tool get-dataset-versions called id=%s page_size=%s cursor=%r format=%s",
+            id,
+            page_size,
+            cursor,
+            format,
+        )
+        try:
+            result = await client.get_dataset_versions(
+                id,
+                page_size=page_size,
+                cursor=cursor,
+            )
+            formatted = client.format_dataset_versions(result, format)
+
+            if format == "raw":
+                return json.dumps(formatted, indent=2)
+            if isinstance(formatted, dict):
+                return json.dumps(formatted, indent=2)
+            return str(formatted)
+
+        except Exception as exc:
+            return _tool_error_response(
+                "get-dataset-versions",
+                exc,
+                verbose=verbose_mode,
+                context=_context_without_none(
+                    {
+                        "id": id,
+                        "page_size": page_size,
+                        "cursor": cursor,
+                        "format": format,
+                    }
+                ),
             )
 
     @server.tool(
@@ -2016,7 +2289,8 @@ def main():
         Returns:
             JSON string containing matching project reference entries
         """
-        LOGGER.debug("Tool lookup-project-portal called query=%r limit=%s", query, limit)
+        LOGGER.debug(
+            "Tool lookup-project-portal called query=%r limit=%s", query, limit)
         try:
             result = search_project_portals(query=query, limit=limit)
             return json.dumps(result, indent=2)
@@ -2025,7 +2299,8 @@ def main():
                 "lookup-project-portal",
                 exc,
                 verbose=verbose_mode,
-                context=_context_without_none({"query": query, "limit": limit}),
+                context=_context_without_none(
+                    {"query": query, "limit": limit}),
             )
 
     @server.tool(

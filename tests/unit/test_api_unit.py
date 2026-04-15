@@ -19,6 +19,8 @@ from essdive_mcp.main import (
     search_project_portals,
     _dataset_matches_local_filters,
     _apply_local_dataset_filters,
+    _default_dataset_search_is_public,
+    _resolve_startup_api_token,
 )
 import pytest
 import os
@@ -47,11 +49,21 @@ class TestGetApiKey:
             result = get_api_key("param_key")
             assert result == "param_key"
 
-    def test_get_api_key_missing_raises_error(self):
-        """Test that missing API key raises ValueError."""
+    def test_get_api_key_missing_returns_none(self):
+        """Missing token config should be allowed for anonymous public access."""
         with patch.dict(os.environ, {}, clear=True):
-            with pytest.raises(ValueError, match="ESS-DIVE API key is required"):
-                get_api_key(None)
+            assert get_api_key(None) is None
+
+    def test_resolve_startup_api_token_warns_and_falls_back_on_bad_token_file(
+        self, caplog: pytest.LogCaptureFixture
+    ):
+        """Unreadable token files should warn and fall back to anonymous mode."""
+        with caplog.at_level("WARNING", logger="essdive_mcp"):
+            resolved = _resolve_startup_api_token(token_file="/tmp/definitely-missing")
+
+        assert resolved is None
+        assert "Could not read ESS-DIVE token file" in caplog.text
+        assert "Starting without ESS-DIVE auth" in caplog.text
 
 
 class TestBooleanHelpers:
@@ -70,6 +82,18 @@ class TestBooleanHelpers:
         assert not _is_truthy("false")
         assert not _is_truthy("")
         assert not _is_truthy(None)
+
+
+class TestDatasetSearchVisibilityDefaults:
+    """Tests for default public/private search visibility behavior."""
+
+    def test_anonymous_search_defaults_to_public_only(self):
+        """Anonymous search should keep the existing public-only behavior."""
+        assert _default_dataset_search_is_public(None) is True
+
+    def test_authenticated_search_allows_private_matches(self):
+        """Authenticated search should not force the API back to public-only."""
+        assert _default_dataset_search_is_public("token-123") is None
 
 
 class TestToolErrorPayload:
@@ -133,7 +157,8 @@ class TestProjectPortalReferences:
         result = search_project_portals("East River", limit=5)
 
         assert result["count"] >= 1
-        assert any("East River" in item["name"] or "East River" in " ".join(item["aliases"]) for item in result["results"])
+        assert any("East River" in item["name"] or "East River" in " ".join(
+            item["aliases"]) for item in result["results"])
 
     def test_search_project_portals_without_query_lists_entries(self):
         """Listing without a query should return a bounded set of entries."""
@@ -365,6 +390,85 @@ class TestESSDiveClient:
             assert params["bbox"] == "34.0,-119.0,35.0,-117.0"
 
     @pytest.mark.asyncio
+    async def test_search_datasets_includes_sort_param(self):
+        """Sort directives should be forwarded to the API."""
+        client = ESSDiveClient(api_token="test_token")
+
+        mock_response_obj = Mock()
+        mock_response_obj.json.return_value = {"result": [], "total": 0}
+        mock_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            await client.search_datasets(
+                text="soil carbon",
+                sort="dateUploaded:desc,authorLastName:asc",
+            )
+
+            params = mock_client_instance.get.call_args.kwargs["params"]
+            assert params["sort"] == "dateUploaded:desc,authorLastName:asc"
+
+    @pytest.mark.asyncio
+    async def test_search_datasets_cursor_omits_legacy_row_start_and_default_page_size(self):
+        """Cursor follow-up search requests should not force rowStart or pageSize defaults."""
+        client = ESSDiveClient(api_token="test_token")
+
+        mock_response_obj = Mock()
+        mock_response_obj.json.return_value = {"result": [], "total": 0}
+        mock_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            await client.search_datasets(
+                text="soil carbon",
+                cursor="cursor-123",
+                sort="name:asc",
+            )
+
+            params = mock_client_instance.get.call_args.kwargs["params"]
+            assert params == {"cursor": "cursor-123", "text": "soil carbon", "sort": "name:asc"}
+
+    @pytest.mark.asyncio
+    async def test_search_datasets_cursor_includes_explicit_matching_page_size(self):
+        """Cursor follow-up requests may include pageSize only when explicitly supplied."""
+        client = ESSDiveClient(api_token="test_token")
+
+        mock_response_obj = Mock()
+        mock_response_obj.json.return_value = {"result": [], "total": 0}
+        mock_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            await client.search_datasets(
+                text="soil carbon",
+                cursor="cursor-123",
+                page_size=10,
+            )
+
+            params = mock_client_instance.get.call_args.kwargs["params"]
+            assert params["cursor"] == "cursor-123"
+            assert params["pageSize"] == 10
+            assert "rowStart" not in params
+
+    @pytest.mark.asyncio
     async def test_search_datasets_accepts_string_bbox(self):
         """bbox may be provided in the API's comma-delimited string format."""
         client = ESSDiveClient(api_token="test_token")
@@ -429,7 +533,8 @@ class TestESSDiveClient:
         )
         mock_response_obj = Mock()
         mock_response_obj.status_code = 404
-        mock_response_obj.json.return_value = {"detail": "No datasets were found."}
+        mock_response_obj.json.return_value = {
+            "detail": "No datasets were found."}
         mock_response_obj.raise_for_status.side_effect = httpx.HTTPStatusError(
             "404 not found",
             request=request,
@@ -635,6 +740,71 @@ class TestESSDiveClient:
             assert result["dataset"]["name"] == "Dataset 1"
 
     @pytest.mark.asyncio
+    async def test_get_dataset_versions(self):
+        """Test get_dataset_versions method."""
+        client = ESSDiveClient(api_token="test_token")
+
+        mock_response = {
+            "total": 2,
+            "pageSize": 2,
+            "nextCursor": "next-cursor",
+            "previousCursor": None,
+            "result": [
+                {
+                    "id": "ds-v2",
+                    "viewUrl": "https://example.org/ds-v2",
+                    "dateUploaded": "2026-01-01T00:00:00Z",
+                    "dataset": {
+                        "name": "Dataset 1 v2",
+                        "@id": "doi:10.1234/example",
+                        "datePublished": "2026",
+                    },
+                }
+            ],
+        }
+
+        mock_response_obj = Mock()
+        mock_response_obj.json.return_value = mock_response
+        mock_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            result = await client.get_dataset_versions("doi:10.1234/example", page_size=2)
+
+            assert result["total"] == 2
+            assert result["result"][0]["id"] == "ds-v2"
+            params = mock_client_instance.get.call_args.kwargs["params"]
+            assert params["pageSize"] == 2
+
+    @pytest.mark.asyncio
+    async def test_get_dataset_versions_omits_page_size_when_unset(self):
+        """Cursor follow-up requests should not force a default page size."""
+        client = ESSDiveClient(api_token="test_token")
+
+        mock_response_obj = Mock()
+        mock_response_obj.json.return_value = {"total": 0, "result": []}
+        mock_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            await client.get_dataset_versions("doi:10.1234/example", cursor="cursor-123")
+
+            params = mock_client_instance.get.call_args.kwargs["params"]
+            assert params == {"cursor": "cursor-123"}
+
+    @pytest.mark.asyncio
     async def test_get_dataset_status(self):
         """Test get_dataset_status method."""
         client = ESSDiveClient(api_token="test_token")
@@ -749,6 +919,47 @@ class TestFormatResults:
         assert "after local metadata filtering" in formatted
         assert "from 12 native matches" in formatted
 
+    def test_format_results_summary_includes_effective_sort(self):
+        """Summary format should surface the effective API sort order."""
+        client = ESSDiveClient()
+
+        results = {
+            "result": [
+                {
+                    "id": "ds1",
+                    "dataset": {"name": "Dataset 1", "datePublished": "2024-01-01"},
+                    "viewUrl": "https://example.com/ds1",
+                }
+            ],
+            "total": 1,
+            "query": {"sort": "name:asc"},
+        }
+
+        formatted = client.format_results(results, "summary")
+
+        assert "Sort: name:asc" in formatted
+
+    def test_format_results_summary_includes_cursor_pagination(self):
+        """Summary format should expose next/previous cursors when present."""
+        client = ESSDiveClient()
+
+        results = {
+            "result": [
+                {
+                    "id": "ds1",
+                    "dataset": {"name": "Dataset 1", "datePublished": "2024-01-01"},
+                    "viewUrl": "https://example.com/ds1",
+                }
+            ],
+            "total": 10,
+            "nextCursor": "next-cursor",
+            "previousCursor": None,
+        }
+
+        formatted = client.format_results(results, "summary")
+
+        assert "Pagination: previousCursor=None; nextCursor=next-cursor" in formatted
+
     def test_format_results_detailed_with_extra_metadata(self):
         """Detailed format should surface richer dataset metadata when present."""
         client = ESSDiveClient()
@@ -801,6 +1012,81 @@ class TestFormatResults:
         formatted = client.format_results(results, "summary")
 
         assert "No results found" in formatted
+
+    def test_format_dataset_versions_raw(self):
+        """Raw version format should return unchanged results."""
+        client = ESSDiveClient()
+        results = {"result": [{"id": "ds-v2"}], "total": 1}
+
+        formatted = client.format_dataset_versions(results, "raw")
+
+        assert formatted == results
+
+    def test_format_dataset_versions_summary(self):
+        """Summary version format should include pagination cursors and version IDs."""
+        client = ESSDiveClient()
+
+        results = {
+            "total": 2,
+            "pageSize": 2,
+            "nextCursor": "next-cursor",
+            "previousCursor": None,
+            "result": [
+                {
+                    "id": "ds-v2",
+                    "viewUrl": "https://example.com/ds-v2",
+                    "dateUploaded": "2026-01-01T00:00:00Z",
+                    "dataset": {
+                        "name": "Dataset 1 v2",
+                        "@id": "doi:10.1234/example",
+                        "datePublished": "2026",
+                    },
+                }
+            ],
+        }
+
+        formatted = client.format_dataset_versions(results, "summary")
+
+        assert isinstance(formatted, str)
+        assert "Found 2 visible dataset versions" in formatted
+        assert "nextCursor: next-cursor" in formatted
+        assert "ds-v2" in formatted
+
+    def test_format_dataset_versions_detailed(self):
+        """Detailed version format should surface citation and neighbor links."""
+        client = ESSDiveClient()
+
+        results = {
+            "total": 1,
+            "pageSize": 1,
+            "nextCursor": None,
+            "previousCursor": None,
+            "result": [
+                {
+                    "id": "ds-v2",
+                    "viewUrl": "https://example.com/ds-v2",
+                    "url": "https://api.example.com/packages/ds-v2",
+                    "next": "https://api.example.com/packages/ds-v3",
+                    "previous": "https://api.example.com/packages/ds-v1",
+                    "dateUploaded": "2026-01-01T00:00:00Z",
+                    "dateModified": "2026-01-02T00:00:00Z",
+                    "isPublic": True,
+                    "citation": "Example Citation",
+                    "dataset": {
+                        "name": "Dataset 1 v2",
+                        "@id": "doi:10.1234/example",
+                        "datePublished": "2026",
+                        "description": "Example description",
+                    },
+                }
+            ],
+        }
+
+        formatted = client.format_dataset_versions(results, "detailed")
+
+        assert "Example Citation" in formatted
+        assert "Newer Version URL" in formatted
+        assert "Older Version URL" in formatted
 
 
 class TestNormalizeDoi:

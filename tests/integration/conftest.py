@@ -13,11 +13,11 @@ _FIXTURES_PATH = Path(__file__).parent / "fixtures" / "api_examples.json"
 
 @pytest.fixture(scope="session")
 def essdive_api_token() -> str:
-    """Return ESS-DIVE API token or skip ESS-DIVE integration tests."""
+    """Return ESS-DIVE API token or skip authenticated ESS-DIVE integration tests."""
     token = os.getenv("ESSDIVE_API_TOKEN")
     if not token:
         pytest.skip(
-            "ESSDIVE_API_TOKEN is required for ESS-DIVE integration tests."
+            "ESSDIVE_API_TOKEN is required for authenticated ESS-DIVE integration tests."
         )
     return token
 

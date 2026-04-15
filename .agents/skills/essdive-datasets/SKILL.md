@@ -1,11 +1,17 @@
 ---
 name: essdive-datasets
-description: Search ESS-DIVE datasets, fetch metadata/permissions, and parse FLMD via MCP tools.
+description: Search ESS-DIVE datasets, fetch metadata/version history/permissions, and parse FLMD via MCP tools.
 ---
 
 # Setup (once)
 
 Run the MCP server locally:
+
+```bash
+uv run python src/essdive_mcp/main.py
+```
+
+If you need authenticated/private-data access, provide a token explicitly:
 
 ```bash
 uv run python src/essdive_mcp/main.py --token YOUR_ESS_DIVE_TOKEN_HERE
@@ -23,6 +29,12 @@ between ESS and DIVE).
 Register with Claude Code (stdio transport):
 
 ```bash
+claude mcp add --transport stdio essdive-mcp -- uv run python ./src/essdive_mcp/main.py
+```
+
+If you need authenticated/private-data access, add a token:
+
+```bash
 claude mcp add --transport stdio essdive-mcp --env ESSDIVE_API_TOKEN=YOUR_ESS_DIVE_TOKEN_HERE -- uv run python ./src/essdive_mcp/main.py
 ```
 
@@ -36,6 +48,7 @@ claude mcp add --transport stdio essdive-mcp -- uv run python ./src/essdive_mcp/
 
 - `search-datasets`
 - `get-dataset`
+- `get-dataset-versions`
 - `get-dataset-permissions`
 - `parse-flmd-file`
 - `lookup-project-portal`
@@ -59,6 +72,28 @@ Filter by temporal coverage:
 
 ```
 search-datasets with begin_date="2020" and end_date="2021-06" and format="detailed"
+```
+
+Sort results by one or more API-supported fields:
+
+```
+search-datasets with query="soil carbon" and sort="name:asc"
+```
+
+```
+search-datasets with query="soil carbon" and sort="dateUploaded:desc,authorLastName:asc"
+```
+
+Follow a search cursor to the next page:
+
+```
+search-datasets with query="BIONTE" and sort="name:asc" and page_size=2
+```
+
+Then use the returned `nextCursor` or `previousCursor`:
+
+```
+search-datasets with query="BIONTE" and sort="name:asc" and cursor="PASTE_NEXT_OR_PREVIOUS_CURSOR_HERE"
 ```
 
 Filter by bounding box:
@@ -120,6 +155,18 @@ Get detailed metadata for a dataset:
 get-dataset with id="ess-dive-9ea5fe57db73c90-20241024T093714082510"
 ```
 
+List version history from newest to oldest:
+
+```
+get-dataset-versions with id="doi:10.15485/2529445" and page_size=2
+```
+
+Follow a version-history cursor:
+
+```
+get-dataset-versions with id="doi:10.15485/2529445" and cursor="PASTE_NEXT_OR_PREVIOUS_CURSOR_HERE"
+```
+
 Check sharing permissions (requires token):
 
 ```
@@ -147,10 +194,15 @@ coords-to-map-links with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
 ## Notes
 
 - Use `format="summary"` for compact results, or `format="detailed"` for full metadata.
-- `page_size` max is 100; `row_start` is 1-based.
+- `page_size` max is 100.
+- `cursor` is the preferred way to page through search results. `row_start` is still supported for compatibility but is legacy.
+- For cursor follow-up searches, reuse the same search filters and omit `page_size` unless you know it matches the cursor's encoded page size.
+- `sort` accepts comma-separated `field:direction` clauses. Supported fields: `name`, `dateUploaded`, `authorLastName`. Supported directions: `asc`, `desc`.
+- `get-dataset-versions` lists visible versions from newest to oldest and supports cursor pagination.
+- For `get-dataset-versions`, omit `page_size` on cursor follow-up calls unless you know it matches the cursor's encoded page size.
 - `bbox` uses `[min_lat, min_lon, max_lat, max_lon]` ordering and can also be passed as a comma-delimited string.
 - Point search requires `lat`, `lon`, and `radius` together. Do not combine point search with `bbox`.
-- Native ESS-DIVE `/packages` filters include `query`/`text`, `creator`, `provider_name`, `date_published`, `begin_date`, `end_date`, `keywords`, `bbox`, and `lat`/`lon`/`radius`.
+- Native ESS-DIVE `/packages` filters include `query`/`text`, `creator`, `provider_name`, `date_published`, `begin_date`, `end_date`, `keywords`, `sort`, `bbox`, and `lat`/`lon`/`radius`.
 - Additional filters such as `creator_affiliation`, `variable_measured`, `measurement_technique`, `funder`, `license`, `alternate_name`, `editor`, `file_format`, `file_name`, and `file_url` are applied locally after the initial API search using full dataset metadata from `get-dataset`.
 - If you need very precise filtering on those local-only fields, start with a narrower native search first, then apply the local metadata filters.
 - Local metadata filtering only inspects the current API page, so increase `page_size` or adjust `row_start` if you want to scan more native matches.
@@ -168,6 +220,17 @@ curl -sG "https://api.ess-dive.lbl.gov/packages" \
   --data-urlencode "text=soil carbon" \
   --data-urlencode "pageSize=10" \
   --data-urlencode "rowStart=1" \
+  --data-urlencode "isPublic=true"
+```
+
+Follow a dataset-search cursor directly against the API:
+
+```bash
+curl -sG "https://api.ess-dive.lbl.gov/packages" \
+  -H "Accept: application/json" \
+  --data-urlencode "text=BIONTE" \
+  --data-urlencode "sort=name:asc" \
+  --data-urlencode "cursor=PASTE_NEXT_OR_PREVIOUS_CURSOR_HERE" \
   --data-urlencode "isPublic=true"
 ```
 
@@ -190,4 +253,12 @@ curl -sG "https://api.ess-dive.lbl.gov/packages/REPLACE_WITH_PACKAGE_ID" \
   -H "User-Agent: Mozilla/5.0" \
   -H "Range: bytes=0-1000" \
   --data-urlencode "isPublic=true"
+```
+
+Fetch dataset version history by DOI or package ID:
+
+```bash
+curl -sG "https://api.ess-dive.lbl.gov/packages/doi%3A10.15485%2F2529445/versions" \
+  -H "Accept: application/json" \
+  --data-urlencode "pageSize=2"
 ```

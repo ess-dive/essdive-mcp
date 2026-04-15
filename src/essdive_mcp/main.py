@@ -41,7 +41,9 @@ MCP Tools Available:
   - coords-to-map-links: Convert points or a bounding box to viewable map links (e.g., geojson.io).
 
 Authentication:
-  API token can be provided via --token, --token-file, or ESSDIVE_API_TOKEN.
+  Public dataset reads do not require authentication. An API token can still be
+  provided via --token, --token-file, or ESSDIVE_API_TOKEN for authenticated
+  requests such as private-data access.
 """
 import asyncio
 import os
@@ -1223,7 +1225,8 @@ class ESSDiveClient:
                 if variables:
                     detailed += f"   Variables Measured: {', '.join(variables[:6])}\n"
 
-                techniques = _as_string_list(ds_data.get("measurementTechnique"))
+                techniques = _as_string_list(
+                    ds_data.get("measurementTechnique"))
                 if techniques:
                     detailed += (
                         f"   Measurement Techniques: "
@@ -1518,19 +1521,16 @@ def _summarize_essdeepdive_file_response(result: Dict[str, Any]) -> Dict[str, An
 
 def get_api_key(
     api_key: Optional[str] = None, token_file: Optional[str] = None
-) -> str:
+) -> Optional[str]:
     """
-    Get ESS-DIVE API key from parameter, token file, or environment variable.
+    Get an optional ESS-DIVE API token from a parameter, token file, or environment.
 
     Args:
         api_key: Optional API key provided directly.
         token_file: Optional path to a file containing the API key.
 
     Returns:
-        The API key string.
-
-    Raises:
-        ValueError: If no API key is provided or found in environment.
+        The API key string, or None when no token is configured.
     """
     if api_key is None and token_file:
         try:
@@ -1544,12 +1544,7 @@ def get_api_key(
     if not api_key:
         api_key = os.getenv("ESSDIVE_API_TOKEN")
 
-    if not api_key:
-        raise ValueError(
-            "ESS-DIVE API key is required. Provide it with --token, --token-file, or set ESSDIVE_API_TOKEN."
-        )
-
-    return api_key
+    return api_key or None
 
 
 def main():
@@ -1559,11 +1554,11 @@ def main():
     parser.add_argument(
         "--token",
         "-t",
-        help="ESS-DIVE API token for authenticated requests (can also use ESSDIVE_API_TOKEN env var)",
+        help="Optional ESS-DIVE API token for authenticated/private-data requests (can also use ESSDIVE_API_TOKEN env var)",
     )
     parser.add_argument(
         "--token-file",
-        help="Path to a file containing the ESS-DIVE API token",
+        help="Path to a file containing an optional ESS-DIVE API token",
     )
     parser.add_argument(
         "--verbose",
@@ -1576,13 +1571,13 @@ def main():
     verbose_mode = args.verbose or _is_truthy(os.getenv("ESSDIVE_MCP_VERBOSE"))
     _configure_logging(verbose_mode)
 
-    # Get and validate API token
-    try:
-        api_token = get_api_key(args.token, token_file=args.token_file)
-    except ValueError as exc:
-        parser.error(str(exc))
+    api_token = get_api_key(args.token, token_file=args.token_file)
 
-    LOGGER.info("Starting ESS-DIVE MCP server (verbose=%s)", verbose_mode)
+    LOGGER.info(
+        "Starting ESS-DIVE MCP server (verbose=%s, authenticated=%s)",
+        verbose_mode,
+        bool(api_token),
+    )
 
     # Create a FastMCP server
     server = FastMCP("essdive_mcp")
@@ -1863,7 +1858,8 @@ def main():
                     content += f"- {location}\n"
                 content += "\n"
 
-            variables_measured = _as_string_list(dataset.get("variableMeasured"))
+            variables_measured = _as_string_list(
+                dataset.get("variableMeasured"))
             if variables_measured:
                 content += "## Variables Measured\n"
                 content += ", ".join(variables_measured)
@@ -1881,7 +1877,8 @@ def main():
             funders = []
             for funder in _as_list(dataset.get("funder")):
                 if isinstance(funder, dict):
-                    funder_name = ", ".join(_organization_search_strings(funder))
+                    funder_name = ", ".join(
+                        _organization_search_strings(funder))
                     if funder_name:
                         funders.append(funder_name)
                 else:
@@ -2016,7 +2013,8 @@ def main():
         Returns:
             JSON string containing matching project reference entries
         """
-        LOGGER.debug("Tool lookup-project-portal called query=%r limit=%s", query, limit)
+        LOGGER.debug(
+            "Tool lookup-project-portal called query=%r limit=%s", query, limit)
         try:
             result = search_project_portals(query=query, limit=limit)
             return json.dumps(result, indent=2)
@@ -2025,7 +2023,8 @@ def main():
                 "lookup-project-portal",
                 exc,
                 verbose=verbose_mode,
-                context=_context_without_none({"query": query, "limit": limit}),
+                context=_context_without_none(
+                    {"query": query, "limit": limit}),
             )
 
     @server.tool(

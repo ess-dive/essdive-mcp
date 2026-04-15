@@ -18,13 +18,14 @@ You need all of the following:
 - Python `3.10` or newer
 - `uv`
 - Goose Desktop
-- an ESS-DIVE API token
+- an ESS-DIVE API token if you need authenticated/private-data access
 - access to an LLM API that Goose can use
 
 Important:
 
 - Goose must be configured with a working model provider before the ESS-DIVE MCP extension will be useful.
-- The ESS-DIVE token environment variable name must be exactly `ESSDIVE_API_TOKEN`.
+- Public ESS-DIVE dataset search and retrieval do not require a token.
+- If you configure an ESS-DIVE token, the environment variable name must be exactly `ESSDIVE_API_TOKEN`.
 - ESS-DIVE API tokens expire after 24 hours.
 
 If you plan to use Berkeley Lab CBORG as your LLM provider, see [CBORG_SETUP.md](./CBORG_SETUP.md).
@@ -127,7 +128,7 @@ In Goose Desktop:
 3. Click `Add custom extension`.
 4. Choose a command-line or `Standard IO` extension if Goose asks for a type.
 5. Enter the ESS-DIVE MCP command.
-6. Add the `ESSDIVE_API_TOKEN` environment variable.
+6. If you need authenticated/private-data access, add the `ESSDIVE_API_TOKEN` environment variable.
 7. Save the extension.
 
 ### Recommended extension values
@@ -169,7 +170,7 @@ If Goose asks for command and arguments separately, use:
 - macOS/Linux command: `uvx`
 - macOS/Linux arguments: `--from git+https://github.com/ess-dive/essdive-mcp essdive-mcp`
 
-### Environment Variable To Add
+### Optional Environment Variable
 
 Add this environment variable to the extension:
 
@@ -177,15 +178,17 @@ Add this environment variable to the extension:
 ESSDIVE_API_TOKEN=YOUR_ESS_DIVE_TOKEN_HERE
 ```
 
-This lets Goose pass your ESS-DIVE token to the MCP server without needing a separate local token file.
+This lets Goose pass your ESS-DIVE token to the MCP server without needing a separate local token file. For public dataset reads, you can leave this unset.
 
 ### Local Checkout Alternative
 
 If you already cloned this repository and want Goose to run your local copy of the ESS-DIVE MCP instead of downloading from GitHub each time, you can use:
 
 ```text
-uv run essdive-mcp --token-file /absolute/path/to/essdivetoken
+uv run essdive-mcp
 ```
+
+If you need authenticated/private-data access in a local checkout, add `--token-file /absolute/path/to/essdivetoken` or set `ESSDIVE_API_TOKEN`.
 
 That option is better for development or testing local changes. For most users, `uvx` is simpler.
 
@@ -232,7 +235,7 @@ Check all of the following:
 
 ### Authentication errors from ESS-DIVE
 
-Goose may return a message like "It seems that I'm currently unable to access public datasets from the ESS-DIVE API due to authorization issues.".
+Public dataset reads should work without a token. If authenticated/private-data requests fail, Goose may return an authorization error.
 
 Usually this means:
 

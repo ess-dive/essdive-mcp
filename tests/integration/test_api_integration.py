@@ -39,6 +39,58 @@ def _download_prefix(url: str, bytes_to_read: int) -> tuple[int, str, bytes]:
 
 
 @pytest.mark.asyncio
+async def test_get_public_dataset_by_id_live_without_token(
+    essdive_dataset_examples: list[dict[str, str]],
+):
+    """Public ESS-DIVE datasets should be retrievable without authentication."""
+    client = ESSDiveClient()
+    example = essdive_dataset_examples[0]
+
+    response = await client.get_dataset(example["id"])
+
+    assert response["id"] == example["id"]
+    assert response.get("isPublic") is True
+    assert response.get("viewUrl")
+
+
+@pytest.mark.asyncio
+async def test_search_public_datasets_live_without_token(
+    essdive_search_examples: list[dict[str, Any]],
+):
+    """Anonymous callers should be able to search public ESS-DIVE datasets."""
+    client = ESSDiveClient()
+    example = essdive_search_examples[0]
+
+    response = await client.search_datasets(
+        text=str(example["query"]),
+        begin_date=example.get("begin_date"),
+        end_date=example.get("end_date"),
+        bbox=example.get("bbox"),
+        lat=example.get("lat"),
+        lon=example.get("lon"),
+        radius=example.get("radius"),
+        is_public=True,
+        page_size=int(example.get("page_size", 10)),
+    )
+
+    assert isinstance(response, dict)
+    assert response["total"] > 0
+    assert isinstance(response["result"], list)
+    assert str(example["expected_id"]) in {item["id"] for item in response["result"]}
+
+
+def test_doi_to_essdive_id_live_without_token(
+    essdive_dataset_examples: list[dict[str, str]],
+):
+    """Public DOI resolution should work without authentication."""
+    example = essdive_dataset_examples[0]
+
+    resolved_id = doi_to_essdive_id(example["doi"])
+
+    assert resolved_id == example["id"]
+
+
+@pytest.mark.asyncio
 async def test_get_dataset_by_id_live(
     essdive_api_token: str,
     essdive_dataset_examples: list[dict[str, str]],

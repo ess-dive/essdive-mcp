@@ -47,11 +47,10 @@ class TestGetApiKey:
             result = get_api_key("param_key")
             assert result == "param_key"
 
-    def test_get_api_key_missing_raises_error(self):
-        """Test that missing API key raises ValueError."""
+    def test_get_api_key_missing_returns_none(self):
+        """Missing token config should be allowed for anonymous public access."""
         with patch.dict(os.environ, {}, clear=True):
-            with pytest.raises(ValueError, match="ESS-DIVE API key is required"):
-                get_api_key(None)
+            assert get_api_key(None) is None
 
 
 class TestBooleanHelpers:

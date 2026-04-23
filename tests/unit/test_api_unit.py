@@ -881,6 +881,7 @@ class TestFormatResults:
             "result": [
                 {
                     "id": "ds1",
+                    "isPublic": True,
                     "dataset": {"name": "Dataset 1", "datePublished": "2024-01-01"},
                     "viewUrl": "https://example.com/ds1"
                 }
@@ -893,6 +894,7 @@ class TestFormatResults:
         assert isinstance(formatted, str)
         assert "Dataset 1" in formatted
         assert "ds1" in formatted
+        assert "isPublic: True" in formatted
 
     def test_format_results_summary_with_local_filtering(self):
         """Summary format should mention local metadata filtering when used."""
@@ -968,6 +970,10 @@ class TestFormatResults:
             "result": [
                 {
                     "id": "ds1",
+                    "isPublic": True,
+                    "dateUploaded": "2024-01-02T00:00:00Z",
+                    "dateModified": "2024-01-03T00:00:00Z",
+                    "citation": "Example dataset citation",
                     "dataset": {
                         "name": "Dataset 1",
                         "datePublished": "2024-01-01",
@@ -996,12 +1002,16 @@ class TestFormatResults:
         formatted = client.format_results(results, "detailed")
 
         assert "Alternate Names" in formatted
+        assert "isPublic: True" in formatted
+        assert "dateUploaded: 2024-01-02T00:00:00Z" in formatted
+        assert "dateModified: 2024-01-03T00:00:00Z" in formatted
         assert "Temporal Coverage: 2020-01-01 to 2020-12-31" in formatted
         assert "Spatial Coverage: Pennsylvania (41.0, -77.5)" in formatted
         assert "Variables Measured: snow water equivalent" in formatted
         assert "Measurement Techniques: Automated snow-depth sensor" in formatted
         assert "Funders: DOE" in formatted
         assert "License: https://creativecommons.org/licenses/by/4.0/" in formatted
+        assert "citation: Example dataset citation" in formatted
 
     def test_format_results_no_results(self):
         """Test formatting when no results are found."""
@@ -1012,6 +1022,55 @@ class TestFormatResults:
         formatted = client.format_results(results, "summary")
 
         assert "No results found" in formatted
+
+    def test_format_dataset_raw(self):
+        """Raw dataset format should return unchanged results."""
+        client = ESSDiveClient()
+        results = {"id": "ds1", "dataset": {"name": "Dataset 1"}, "isPublic": True}
+
+        formatted = client.format_dataset(results, "raw")
+
+        assert formatted == results
+
+    def test_format_dataset_detailed_includes_top_level_package_fields(self):
+        """Detailed dataset format should expose top-level package metadata."""
+        client = ESSDiveClient()
+
+        results = {
+            "id": "ds1",
+            "viewUrl": "https://example.com/ds1",
+            "dateUploaded": "2024-01-02T00:00:00Z",
+            "dateModified": "2024-01-03T00:00:00Z",
+            "isPublic": True,
+            "citation": "Example dataset citation",
+            "dataset": {
+                "name": "Dataset 1",
+                "@id": "doi:10.15485/example",
+                "datePublished": "2024-01-01",
+                "description": "A test dataset",
+                "distribution": [
+                    {
+                        "name": "data.csv",
+                        "contentSize": 12,
+                        "encodingFormat": "text/csv",
+                        "contentUrl": "https://example.com/data.csv",
+                        "identifier": "file-1",
+                    }
+                ],
+            },
+        }
+
+        formatted = client.format_dataset(results, "detailed")
+
+        assert "**id**: ds1" in formatted
+        assert "**doi**: doi:10.15485/example" in formatted
+        assert "**viewUrl**: https://example.com/ds1" in formatted
+        assert "**dateUploaded**: 2024-01-02T00:00:00Z" in formatted
+        assert "**dateModified**: 2024-01-03T00:00:00Z" in formatted
+        assert "**isPublic**: True" in formatted
+        assert "**citation**: Example dataset citation" in formatted
+        assert "## Data Files" in formatted
+        assert "data.csv" in formatted
 
     def test_format_dataset_versions_raw(self):
         """Raw version format should return unchanged results."""
@@ -1034,6 +1093,7 @@ class TestFormatResults:
             "result": [
                 {
                     "id": "ds-v2",
+                    "isPublic": True,
                     "viewUrl": "https://example.com/ds-v2",
                     "dateUploaded": "2026-01-01T00:00:00Z",
                     "dataset": {
@@ -1051,6 +1111,8 @@ class TestFormatResults:
         assert "Found 2 visible dataset versions" in formatted
         assert "nextCursor: next-cursor" in formatted
         assert "ds-v2" in formatted
+        assert "isPublic: True" in formatted
+        assert "dateUploaded: 2026-01-01T00:00:00Z" in formatted
 
     def test_format_dataset_versions_detailed(self):
         """Detailed version format should surface citation and neighbor links."""
@@ -1084,7 +1146,12 @@ class TestFormatResults:
 
         formatted = client.format_dataset_versions(results, "detailed")
 
-        assert "Example Citation" in formatted
+        assert "citation: Example Citation" in formatted
+        assert "isPublic: True" in formatted
+        assert "dateUploaded: 2026-01-01T00:00:00Z" in formatted
+        assert "dateModified: 2026-01-02T00:00:00Z" in formatted
+        assert "viewUrl: https://example.com/ds-v2" in formatted
+        assert "url: https://api.example.com/packages/ds-v2" in formatted
         assert "Newer Version URL" in formatted
         assert "Older Version URL" in formatted
 

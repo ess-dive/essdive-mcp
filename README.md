@@ -726,8 +726,10 @@ search-datasets with query="East River" and creator_affiliation="Lawrence Berkel
 search-datasets with query="East River" and variable_measured="streamflow" and page_size=5
 search-datasets with query="East River" and funder="NASA" and page_size=5
 get-dataset with id="ess-dive-165671432ae620e-20250908T210722395"
+get-dataset with id="doi:10.15485/2529445" and format="raw"
 get-dataset-versions with id="doi:10.15485/2529445" and page_size=2
 get-dataset-versions with id="doi:10.15485/2529445" and cursor="PASTE_NEXT_CURSOR_HERE"
+get-dataset-status with id="ess-dive-f78cb03d11550da-20260309T160313214"
 get-dataset-permissions with id="ess-dive-165671432ae620e-20250908T210722395"
 doi-to-essdive-id with doi="10.15485/2587853"
 essdive-id-to-doi with essdive_id="ess-dive-165671432ae620e-20250908T210722395"
@@ -903,6 +905,7 @@ and the observed values range from 19.1 to 26.9 C.
 - `search-datasets`
 - `get-dataset`
 - `get-dataset-versions`
+- `get-dataset-status`
 - `get-dataset-permissions`
 - `parse-flmd-file`
 

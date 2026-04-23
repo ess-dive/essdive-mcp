@@ -1,6 +1,6 @@
 ---
 name: essdive-datasets
-description: Search ESS-DIVE datasets, fetch metadata/version history/permissions, and parse FLMD via MCP tools.
+description: Search ESS-DIVE datasets, fetch metadata/version history/status/permissions, and parse FLMD via MCP tools.
 ---
 
 # Setup (once)
@@ -49,6 +49,7 @@ claude mcp add --transport stdio essdive-mcp -- uv run python ./src/essdive_mcp/
 - `search-datasets`
 - `get-dataset`
 - `get-dataset-versions`
+- `get-dataset-status`
 - `get-dataset-permissions`
 - `parse-flmd-file`
 - `lookup-project-portal`
@@ -155,6 +156,19 @@ Get detailed metadata for a dataset:
 get-dataset with id="ess-dive-9ea5fe57db73c90-20241024T093714082510"
 ```
 
+Return the raw dataset payload when you need exact top-level API fields such as
+`isPublic`, `dateUploaded`, `dateModified`, `citation`, or `viewUrl`:
+
+```
+get-dataset with id="doi:10.15485/2529445" and format="raw"
+```
+
+Check publication/workflow status for a dataset:
+
+```
+get-dataset-status with id="ess-dive-f78cb03d11550da-20260309T160313214"
+```
+
 List version history from newest to oldest:
 
 ```
@@ -194,12 +208,17 @@ coords-to-map-links with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
 ## Notes
 
 - Use `format="summary"` for compact results, or `format="detailed"` for full metadata.
+- Use `get-dataset-status` when the user asks for dataset status. Do not infer status from `get-dataset`.
+- If the user asks for the status of multiple datasets, call `get-dataset-status` once per dataset identifier and summarize the results.
+- `get-dataset-status` may require an ESS-DIVE API token and dataset access. If an anonymous call fails, explain that status is auth-gated.
+- `get-dataset` supports `format="raw"` when you need the exact response fields, including top-level `isPublic`.
 - `page_size` max is 100.
 - `cursor` is the preferred way to page through search results. `row_start` is still supported for compatibility but is legacy.
-- For cursor follow-up searches, reuse the same search filters and omit `page_size` unless you know it matches the cursor's encoded page size.
+- Search and version responses include an integer `total` plus `nextCursor` and `previousCursor` when pagination is available.
+- For cursor follow-up searches, omit `cursor` on the first request, then pass the returned `nextCursor` or `previousCursor` value unchanged on later requests. Reuse the same search filters and omit `page_size` unless you know it matches the cursor's encoded page size.
 - `sort` accepts comma-separated `field:direction` clauses. Supported fields: `name`, `dateUploaded`, `authorLastName`. Supported directions: `asc`, `desc`.
 - `get-dataset-versions` lists visible versions from newest to oldest and supports cursor pagination.
-- For `get-dataset-versions`, omit `page_size` on cursor follow-up calls unless you know it matches the cursor's encoded page size.
+- For `get-dataset-versions`, omit `page_size` on cursor follow-up calls unless you know it matches the cursor's encoded page size. As with search, pass returned cursor values unchanged.
 - `bbox` uses `[min_lat, min_lon, max_lat, max_lon]` ordering and can also be passed as a comma-delimited string.
 - Point search requires `lat`, `lon`, and `radius` together. Do not combine point search with `bbox`.
 - Native ESS-DIVE `/packages` filters include `query`/`text`, `creator`, `provider_name`, `date_published`, `begin_date`, `end_date`, `keywords`, `sort`, `bbox`, and `lat`/`lon`/`radius`.

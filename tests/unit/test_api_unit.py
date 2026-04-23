@@ -882,11 +882,15 @@ class TestFormatResults:
                 {
                     "id": "ds1",
                     "isPublic": True,
+                    "url": "https://api.example.com/packages/ds1",
+                    "previous": "https://api.example.com/packages/ds0",
+                    "next": "https://api.example.com/packages/ds2",
                     "dataset": {"name": "Dataset 1", "datePublished": "2024-01-01"},
                     "viewUrl": "https://example.com/ds1"
                 }
             ],
-            "total": 1
+            "total": 1,
+            "user": "anonymous",
         }
 
         formatted = client.format_results(results, "summary")
@@ -895,6 +899,11 @@ class TestFormatResults:
         assert "Dataset 1" in formatted
         assert "ds1" in formatted
         assert "isPublic: True" in formatted
+        assert "User: anonymous" in formatted
+        assert "viewUrl: https://example.com/ds1" in formatted
+        assert "url: https://api.example.com/packages/ds1" in formatted
+        assert "previous: https://api.example.com/packages/ds0" in formatted
+        assert "next: https://api.example.com/packages/ds2" in formatted
 
     def test_format_results_summary_with_local_filtering(self):
         """Summary format should mention local metadata filtering when used."""
@@ -971,6 +980,9 @@ class TestFormatResults:
                 {
                     "id": "ds1",
                     "isPublic": True,
+                    "url": "https://api.example.com/packages/ds1",
+                    "previous": "https://api.example.com/packages/ds0",
+                    "next": "https://api.example.com/packages/ds2",
                     "dateUploaded": "2024-01-02T00:00:00Z",
                     "dateModified": "2024-01-03T00:00:00Z",
                     "citation": "Example dataset citation",
@@ -992,25 +1004,43 @@ class TestFormatResults:
                         "measurementTechnique": ["Automated snow-depth sensor"],
                         "funder": [{"name": "DOE"}],
                         "license": "https://creativecommons.org/licenses/by/4.0/",
+                        "provider": {
+                            "name": "Example Program",
+                            "member": {
+                                "givenName": "Ada",
+                                "familyName": "Lovelace",
+                                "jobTitle": "principalInvestigator",
+                                "affiliation": "Example Lab",
+                            },
+                        },
+                        "award": ["DOE Award #12345"],
                     },
                     "viewUrl": "https://example.com/ds1",
                 }
             ],
             "total": 1,
+            "user": "anonymous",
         }
 
         formatted = client.format_results(results, "detailed")
 
         assert "Alternate Names" in formatted
         assert "isPublic: True" in formatted
+        assert "User: anonymous" in formatted
         assert "dateUploaded: 2024-01-02T00:00:00Z" in formatted
         assert "dateModified: 2024-01-03T00:00:00Z" in formatted
+        assert "viewUrl: https://example.com/ds1" in formatted
+        assert "url: https://api.example.com/packages/ds1" in formatted
+        assert "previous: https://api.example.com/packages/ds0" in formatted
+        assert "next: https://api.example.com/packages/ds2" in formatted
         assert "Temporal Coverage: 2020-01-01 to 2020-12-31" in formatted
         assert "Spatial Coverage: Pennsylvania (41.0, -77.5)" in formatted
         assert "Variables Measured: snow water equivalent" in formatted
         assert "Measurement Techniques: Automated snow-depth sensor" in formatted
         assert "Funders: DOE" in formatted
         assert "License: https://creativecommons.org/licenses/by/4.0/" in formatted
+        assert "Provider: Example Program (Ada Lovelace, principalInvestigator, Example Lab)" in formatted
+        assert "Award: DOE Award #12345" in formatted
         assert "citation: Example dataset citation" in formatted
 
     def test_format_results_no_results(self):
@@ -1039,6 +1069,9 @@ class TestFormatResults:
         results = {
             "id": "ds1",
             "viewUrl": "https://example.com/ds1",
+            "url": "https://api.example.com/packages/ds1",
+            "previous": "https://api.example.com/packages/ds0",
+            "next": "https://api.example.com/packages/ds2",
             "dateUploaded": "2024-01-02T00:00:00Z",
             "dateModified": "2024-01-03T00:00:00Z",
             "isPublic": True,
@@ -1048,6 +1081,16 @@ class TestFormatResults:
                 "@id": "doi:10.15485/example",
                 "datePublished": "2024-01-01",
                 "description": "A test dataset",
+                "provider": {
+                    "name": "Example Program",
+                    "member": {
+                        "givenName": "Ada",
+                        "familyName": "Lovelace",
+                        "jobTitle": "principalInvestigator",
+                        "affiliation": "Example Lab",
+                    },
+                },
+                "award": ["DOE Award #12345"],
                 "distribution": [
                     {
                         "name": "data.csv",
@@ -1065,10 +1108,17 @@ class TestFormatResults:
         assert "**id**: ds1" in formatted
         assert "**doi**: doi:10.15485/example" in formatted
         assert "**viewUrl**: https://example.com/ds1" in formatted
+        assert "**url**: https://api.example.com/packages/ds1" in formatted
+        assert "**previous**: https://api.example.com/packages/ds0" in formatted
+        assert "**next**: https://api.example.com/packages/ds2" in formatted
         assert "**dateUploaded**: 2024-01-02T00:00:00Z" in formatted
         assert "**dateModified**: 2024-01-03T00:00:00Z" in formatted
         assert "**isPublic**: True" in formatted
         assert "**citation**: Example dataset citation" in formatted
+        assert "## Provider" in formatted
+        assert "Example Program (Ada Lovelace, principalInvestigator, Example Lab)" in formatted
+        assert "## Award" in formatted
+        assert "DOE Award #12345" in formatted
         assert "## Data Files" in formatted
         assert "data.csv" in formatted
 
@@ -1090,11 +1140,15 @@ class TestFormatResults:
             "pageSize": 2,
             "nextCursor": "next-cursor",
             "previousCursor": None,
+            "user": "anonymous",
             "result": [
                 {
                     "id": "ds-v2",
                     "isPublic": True,
                     "viewUrl": "https://example.com/ds-v2",
+                    "url": "https://api.example.com/packages/ds-v2",
+                    "previous": "https://api.example.com/packages/ds-v1",
+                    "next": "https://api.example.com/packages/ds-v3",
                     "dateUploaded": "2026-01-01T00:00:00Z",
                     "dataset": {
                         "name": "Dataset 1 v2",
@@ -1109,10 +1163,14 @@ class TestFormatResults:
 
         assert isinstance(formatted, str)
         assert "Found 2 visible dataset versions" in formatted
+        assert "User: anonymous" in formatted
         assert "nextCursor: next-cursor" in formatted
         assert "ds-v2" in formatted
         assert "isPublic: True" in formatted
         assert "dateUploaded: 2026-01-01T00:00:00Z" in formatted
+        assert "url: https://api.example.com/packages/ds-v2" in formatted
+        assert "previous: https://api.example.com/packages/ds-v1" in formatted
+        assert "next: https://api.example.com/packages/ds-v3" in formatted
 
     def test_format_dataset_versions_detailed(self):
         """Detailed version format should surface citation and neighbor links."""
@@ -1123,6 +1181,7 @@ class TestFormatResults:
             "pageSize": 1,
             "nextCursor": None,
             "previousCursor": None,
+            "user": "anonymous",
             "result": [
                 {
                     "id": "ds-v2",
@@ -1146,12 +1205,15 @@ class TestFormatResults:
 
         formatted = client.format_dataset_versions(results, "detailed")
 
+        assert "User: anonymous" in formatted
         assert "citation: Example Citation" in formatted
         assert "isPublic: True" in formatted
         assert "dateUploaded: 2026-01-01T00:00:00Z" in formatted
         assert "dateModified: 2026-01-02T00:00:00Z" in formatted
         assert "viewUrl: https://example.com/ds-v2" in formatted
         assert "url: https://api.example.com/packages/ds-v2" in formatted
+        assert "previous: https://api.example.com/packages/ds-v1" in formatted
+        assert "next: https://api.example.com/packages/ds-v3" in formatted
         assert "Newer Version URL" in formatted
         assert "Older Version URL" in formatted
 

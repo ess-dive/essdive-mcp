@@ -373,6 +373,46 @@ def _organization_search_strings(organization: Dict[str, Any]) -> List[str]:
     return values
 
 
+def _summarize_provider(provider: Any) -> List[str]:
+    """Return readable provider summaries from dataset metadata."""
+    summaries: List[str] = []
+
+    for item in _as_list(provider):
+        if isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+            member = item.get("member")
+
+            member_labels: List[str] = []
+            for member_item in _as_list(member):
+                if isinstance(member_item, dict):
+                    member_name = _person_display_name(member_item)
+                    job_title = str(member_item.get("jobTitle") or "").strip()
+                    affiliation = str(member_item.get("affiliation") or "").strip()
+                    parts = [part for part in [member_name, job_title, affiliation] if part]
+                    if parts:
+                        member_labels.append(", ".join(parts))
+                else:
+                    text = str(member_item).strip()
+                    if text:
+                        member_labels.append(text)
+
+            label = name or ", ".join(_organization_search_strings(item))
+            if member_labels:
+                if label:
+                    label = f"{label} ({'; '.join(member_labels)})"
+                else:
+                    label = "; ".join(member_labels)
+            if label:
+                summaries.append(label)
+            continue
+
+        text = str(item).strip()
+        if text:
+            summaries.append(text)
+
+    return summaries
+
+
 def _distribution_search_strings(
     distribution: Any,
     *,
@@ -1240,6 +1280,7 @@ class ESSDiveClient:
             results.get("query"), dict) else {}
         sort_value = query.get("sort")
         has_cursor_pagination = "nextCursor" in results or "previousCursor" in results
+        user = results.get("user")
 
         if filtering:
             native_total = filtering.get("native_total")
@@ -1256,6 +1297,8 @@ class ESSDiveClient:
 
         if sort_value:
             header += f"Sort: {sort_value}\n\n"
+        if user:
+            header += f"User: {user}\n\n"
         if has_cursor_pagination:
             header += (
                 f"Pagination: previousCursor={results.get('previousCursor') or 'None'}; "
@@ -1272,7 +1315,13 @@ class ESSDiveClient:
                 if "isPublic" in dataset:
                     summary += f"   isPublic: {dataset.get('isPublic')}\n"
                 summary += f"   Published: {ds_data.get('datePublished', 'Unknown')}\n"
-                summary += f"   URL: {dataset.get('viewUrl', 'Unknown')}\n"
+                summary += f"   viewUrl: {dataset.get('viewUrl', 'Unknown')}\n"
+                if dataset.get("url"):
+                    summary += f"   url: {dataset.get('url')}\n"
+                if dataset.get("previous"):
+                    summary += f"   previous: {dataset.get('previous')}\n"
+                if dataset.get("next"):
+                    summary += f"   next: {dataset.get('next')}\n"
                 if i < len(datasets):
                     summary += "\n"
 
@@ -1292,7 +1341,13 @@ class ESSDiveClient:
                 if dataset.get("dateModified"):
                     detailed += f"   dateModified: {dataset.get('dateModified')}\n"
                 detailed += f"   Published: {ds_data.get('datePublished', 'Unknown')}\n"
-                detailed += f"   URL: {dataset.get('viewUrl', 'Unknown')}\n"
+                detailed += f"   viewUrl: {dataset.get('viewUrl', 'Unknown')}\n"
+                if dataset.get("url"):
+                    detailed += f"   url: {dataset.get('url')}\n"
+                if dataset.get("previous"):
+                    detailed += f"   previous: {dataset.get('previous')}\n"
+                if dataset.get("next"):
+                    detailed += f"   next: {dataset.get('next')}\n"
 
                 # Add description if available
                 description = ds_data.get("description", "")
@@ -1351,6 +1406,14 @@ class ESSDiveClient:
                 if license_value:
                     detailed += f"   License: {license_value}\n"
 
+                providers = _summarize_provider(ds_data.get("provider"))
+                if providers:
+                    detailed += f"   Provider: {'; '.join(providers)}\n"
+
+                awards = _as_string_list(ds_data.get("award"))
+                if awards:
+                    detailed += f"   Award: {', '.join(awards)}\n"
+
                 citation = dataset.get("citation")
                 if citation:
                     detailed += f"   citation: {citation}\n"
@@ -1394,6 +1457,12 @@ class ESSDiveClient:
             content += f"**doi**: {doi}\n"
         if result.get("viewUrl"):
             content += f"**viewUrl**: {result.get('viewUrl')}\n"
+        if result.get("url"):
+            content += f"**url**: {result.get('url')}\n"
+        if result.get("previous"):
+            content += f"**previous**: {result.get('previous')}\n"
+        if result.get("next"):
+            content += f"**next**: {result.get('next')}\n"
         if result.get("dateUploaded"):
             content += f"**dateUploaded**: {result.get('dateUploaded')}\n"
         if result.get("dateModified"):
@@ -1504,6 +1573,20 @@ class ESSDiveClient:
             content += "## License\n"
             content += f"{license_value}\n\n"
 
+        providers = _summarize_provider(dataset.get("provider"))
+        if providers:
+            content += "## Provider\n"
+            for provider in providers:
+                content += f"- {provider}\n"
+            content += "\n"
+
+        awards = _as_string_list(dataset.get("award"))
+        if awards:
+            content += "## Award\n"
+            for award in awards:
+                content += f"- {award}\n"
+            content += "\n"
+
         distribution = dataset.get("distribution", [])
         if distribution:
             content += "## Data Files\n"
@@ -1541,6 +1624,7 @@ class ESSDiveClient:
 
         versions = results["result"]
         total = results.get("total", 0)
+        user = results.get("user")
         header = (
             f"Found {total} visible dataset versions. "
             f"Showing {len(versions)} results from newest to oldest:\n"
@@ -1551,6 +1635,8 @@ class ESSDiveClient:
             f"  previousCursor: {results.get('previousCursor') or 'None'}\n"
             f"  nextCursor: {results.get('nextCursor') or 'None'}\n\n"
         )
+        if user:
+            header += f"User: {user}\n"
 
         if format_type == "summary":
             summary = header + pagination
@@ -1567,6 +1653,12 @@ class ESSDiveClient:
                 summary += f"   dateUploaded: {version.get('dateUploaded', 'Unknown')}\n"
                 summary += f"   Published: {dataset.get('datePublished', 'Unknown')}\n"
                 summary += f"   viewUrl: {version.get('viewUrl', 'Unknown')}\n"
+                if version.get("url"):
+                    summary += f"   url: {version.get('url')}\n"
+                if version.get("previous"):
+                    summary += f"   previous: {version.get('previous')}\n"
+                if version.get("next"):
+                    summary += f"   next: {version.get('next')}\n"
                 if i < len(versions):
                     summary += "\n"
 
@@ -1588,6 +1680,10 @@ class ESSDiveClient:
                 detailed += f"   isPublic: {version.get('isPublic', 'Unknown')}\n"
                 detailed += f"   viewUrl: {version.get('viewUrl', 'Unknown')}\n"
                 detailed += f"   url: {version.get('url', 'Unknown')}\n"
+                if version.get("previous"):
+                    detailed += f"   previous: {version.get('previous')}\n"
+                if version.get("next"):
+                    detailed += f"   next: {version.get('next')}\n"
 
                 description = dataset.get("description", "")
                 if isinstance(description, list):

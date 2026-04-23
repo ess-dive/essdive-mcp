@@ -898,12 +898,14 @@ class TestFormatResults:
         assert isinstance(formatted, str)
         assert "Dataset 1" in formatted
         assert "ds1" in formatted
-        assert "isPublic: True" in formatted
-        assert "User: anonymous" in formatted
-        assert "viewUrl: https://example.com/ds1" in formatted
-        assert "url: https://api.example.com/packages/ds1" in formatted
-        assert "previous: https://api.example.com/packages/ds0" in formatted
-        assert "next: https://api.example.com/packages/ds2" in formatted
+        assert "isPublic: True" not in formatted
+        assert "Results include public data only." in formatted
+        assert (
+            "Links: [View dataset](https://example.com/ds1) | "
+            "[API record](https://api.example.com/packages/ds1) | "
+            "[Previous version](https://api.example.com/packages/ds0) | "
+            "[Next version](https://api.example.com/packages/ds2)"
+        ) in formatted
 
     def test_format_results_summary_with_local_filtering(self):
         """Summary format should mention local metadata filtering when used."""
@@ -950,8 +952,8 @@ class TestFormatResults:
 
         assert "Sort: name:asc" in formatted
 
-    def test_format_results_summary_includes_cursor_pagination(self):
-        """Summary format should expose next/previous cursors when present."""
+    def test_format_results_summary_omits_cursor_pagination(self):
+        """Summary format should not expose raw cursor values."""
         client = ESSDiveClient()
 
         results = {
@@ -969,7 +971,8 @@ class TestFormatResults:
 
         formatted = client.format_results(results, "summary")
 
-        assert "Pagination: previousCursor=None; nextCursor=next-cursor" in formatted
+        assert "Pagination:" not in formatted
+        assert "next-cursor" not in formatted
 
     def test_format_results_detailed_with_extra_metadata(self):
         """Detailed format should surface richer dataset metadata when present."""
@@ -1025,14 +1028,16 @@ class TestFormatResults:
         formatted = client.format_results(results, "detailed")
 
         assert "Alternate Names" in formatted
-        assert "isPublic: True" in formatted
-        assert "User: anonymous" in formatted
+        assert "isPublic: True" not in formatted
+        assert "Results include public data only." in formatted
         assert "dateUploaded: 2024-01-02T00:00:00Z" in formatted
         assert "dateModified: 2024-01-03T00:00:00Z" in formatted
-        assert "viewUrl: https://example.com/ds1" in formatted
-        assert "url: https://api.example.com/packages/ds1" in formatted
-        assert "previous: https://api.example.com/packages/ds0" in formatted
-        assert "next: https://api.example.com/packages/ds2" in formatted
+        assert (
+            "Links: [View dataset](https://example.com/ds1) | "
+            "[API record](https://api.example.com/packages/ds1) | "
+            "[Previous version](https://api.example.com/packages/ds0) | "
+            "[Next version](https://api.example.com/packages/ds2)"
+        ) in formatted
         assert "Temporal Coverage: 2020-01-01 to 2020-12-31" in formatted
         assert "Spatial Coverage: Pennsylvania (41.0, -77.5)" in formatted
         assert "Variables Measured: snow water equivalent" in formatted
@@ -1107,10 +1112,12 @@ class TestFormatResults:
 
         assert "**id**: ds1" in formatted
         assert "**doi**: doi:10.15485/example" in formatted
-        assert "**viewUrl**: https://example.com/ds1" in formatted
-        assert "**url**: https://api.example.com/packages/ds1" in formatted
-        assert "**previous**: https://api.example.com/packages/ds0" in formatted
-        assert "**next**: https://api.example.com/packages/ds2" in formatted
+        assert (
+            "**links**: [View dataset](https://example.com/ds1) | "
+            "[API record](https://api.example.com/packages/ds1) | "
+            "[Previous version](https://api.example.com/packages/ds0) | "
+            "[Next version](https://api.example.com/packages/ds2)"
+        ) in formatted
         assert "**dateUploaded**: 2024-01-02T00:00:00Z" in formatted
         assert "**dateModified**: 2024-01-03T00:00:00Z" in formatted
         assert "**isPublic**: True" in formatted
@@ -1163,14 +1170,18 @@ class TestFormatResults:
 
         assert isinstance(formatted, str)
         assert "Found 2 visible dataset versions" in formatted
-        assert "User: anonymous" in formatted
-        assert "nextCursor: next-cursor" in formatted
+        assert "Results include public data only." in formatted
+        assert "Pagination:" not in formatted
+        assert "next-cursor" not in formatted
         assert "ds-v2" in formatted
-        assert "isPublic: True" in formatted
+        assert "isPublic: True" not in formatted
         assert "dateUploaded: 2026-01-01T00:00:00Z" in formatted
-        assert "url: https://api.example.com/packages/ds-v2" in formatted
-        assert "previous: https://api.example.com/packages/ds-v1" in formatted
-        assert "next: https://api.example.com/packages/ds-v3" in formatted
+        assert (
+            "Links: [View dataset](https://example.com/ds-v2) | "
+            "[API record](https://api.example.com/packages/ds-v2) | "
+            "[Previous version](https://api.example.com/packages/ds-v1) | "
+            "[Next version](https://api.example.com/packages/ds-v3)"
+        ) in formatted
 
     def test_format_dataset_versions_detailed(self):
         """Detailed version format should surface citation and neighbor links."""
@@ -1205,15 +1216,17 @@ class TestFormatResults:
 
         formatted = client.format_dataset_versions(results, "detailed")
 
-        assert "User: anonymous" in formatted
+        assert "Results include public data only." in formatted
         assert "citation: Example Citation" in formatted
-        assert "isPublic: True" in formatted
+        assert "isPublic: True" not in formatted
         assert "dateUploaded: 2026-01-01T00:00:00Z" in formatted
         assert "dateModified: 2026-01-02T00:00:00Z" in formatted
-        assert "viewUrl: https://example.com/ds-v2" in formatted
-        assert "url: https://api.example.com/packages/ds-v2" in formatted
-        assert "previous: https://api.example.com/packages/ds-v1" in formatted
-        assert "next: https://api.example.com/packages/ds-v3" in formatted
+        assert (
+            "Links: [View dataset](https://example.com/ds-v2) | "
+            "[API record](https://api.example.com/packages/ds-v2) | "
+            "[Previous version](https://api.example.com/packages/ds-v1) | "
+            "[Next version](https://api.example.com/packages/ds-v3)"
+        ) in formatted
         assert "Newer Version URL" in formatted
         assert "Older Version URL" in formatted
 

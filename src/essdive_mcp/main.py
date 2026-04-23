@@ -413,6 +413,36 @@ def _summarize_provider(provider: Any) -> List[str]:
     return summaries
 
 
+def _format_result_user_note(user: Any) -> Optional[str]:
+    """Return a human-readable visibility note derived from the API user field."""
+    if user is None:
+        return None
+
+    user_text = str(user).strip()
+    if not user_text:
+        return None
+    if user_text == "anonymous":
+        return "Results include public data only."
+    return f"User: {user_text}"
+
+
+def _should_show_is_public(value: Any, user: Any) -> bool:
+    """Hide redundant public flags for anonymous result sets."""
+    if value is None:
+        return False
+    user_text = str(user).strip() if user is not None else ""
+    if user_text == "anonymous" and value is True:
+        return False
+    return True
+
+
+def _markdown_link(label: str, url: Optional[str]) -> Optional[str]:
+    """Return a Markdown link when a URL is available."""
+    if not url:
+        return None
+    return f"[{label}]({url})"
+
+
 def _distribution_search_strings(
     distribution: Any,
     *,
@@ -1279,8 +1309,7 @@ class ESSDiveClient:
         query = results.get("query", {}) if isinstance(
             results.get("query"), dict) else {}
         sort_value = query.get("sort")
-        has_cursor_pagination = "nextCursor" in results or "previousCursor" in results
-        user = results.get("user")
+        user_note = _format_result_user_note(results.get("user"))
 
         if filtering:
             native_total = filtering.get("native_total")
@@ -1297,13 +1326,8 @@ class ESSDiveClient:
 
         if sort_value:
             header += f"Sort: {sort_value}\n\n"
-        if user:
-            header += f"User: {user}\n\n"
-        if has_cursor_pagination:
-            header += (
-                f"Pagination: previousCursor={results.get('previousCursor') or 'None'}; "
-                f"nextCursor={results.get('nextCursor') or 'None'}\n\n"
-            )
+        if user_note:
+            header += f"{user_note}\n\n"
 
         if format_type == "summary":
             summary = header
@@ -1312,16 +1336,18 @@ class ESSDiveClient:
                 ds_data = dataset.get("dataset", {})
                 summary += f"{i}. {ds_data.get('name', 'Untitled')}\n"
                 summary += f"   ID: {dataset.get('id', 'Unknown')}\n"
-                if "isPublic" in dataset:
+                if _should_show_is_public(dataset.get("isPublic"), results.get("user")):
                     summary += f"   isPublic: {dataset.get('isPublic')}\n"
                 summary += f"   Published: {ds_data.get('datePublished', 'Unknown')}\n"
-                summary += f"   viewUrl: {dataset.get('viewUrl', 'Unknown')}\n"
-                if dataset.get("url"):
-                    summary += f"   url: {dataset.get('url')}\n"
-                if dataset.get("previous"):
-                    summary += f"   previous: {dataset.get('previous')}\n"
-                if dataset.get("next"):
-                    summary += f"   next: {dataset.get('next')}\n"
+                links = [
+                    _markdown_link("View dataset", dataset.get("viewUrl")),
+                    _markdown_link("API record", dataset.get("url")),
+                    _markdown_link("Previous version", dataset.get("previous")),
+                    _markdown_link("Next version", dataset.get("next")),
+                ]
+                links = [link for link in links if link]
+                if links:
+                    summary += f"   Links: {' | '.join(links)}\n"
                 if i < len(datasets):
                     summary += "\n"
 
@@ -1334,20 +1360,22 @@ class ESSDiveClient:
                 ds_data = dataset.get("dataset", {})
                 detailed += f"{i}. {ds_data.get('name', 'Untitled')}\n"
                 detailed += f"   ID: {dataset.get('id', 'Unknown')}\n"
-                if "isPublic" in dataset:
+                if _should_show_is_public(dataset.get("isPublic"), results.get("user")):
                     detailed += f"   isPublic: {dataset.get('isPublic')}\n"
                 if dataset.get("dateUploaded"):
                     detailed += f"   dateUploaded: {dataset.get('dateUploaded')}\n"
                 if dataset.get("dateModified"):
                     detailed += f"   dateModified: {dataset.get('dateModified')}\n"
                 detailed += f"   Published: {ds_data.get('datePublished', 'Unknown')}\n"
-                detailed += f"   viewUrl: {dataset.get('viewUrl', 'Unknown')}\n"
-                if dataset.get("url"):
-                    detailed += f"   url: {dataset.get('url')}\n"
-                if dataset.get("previous"):
-                    detailed += f"   previous: {dataset.get('previous')}\n"
-                if dataset.get("next"):
-                    detailed += f"   next: {dataset.get('next')}\n"
+                links = [
+                    _markdown_link("View dataset", dataset.get("viewUrl")),
+                    _markdown_link("API record", dataset.get("url")),
+                    _markdown_link("Previous version", dataset.get("previous")),
+                    _markdown_link("Next version", dataset.get("next")),
+                ]
+                links = [link for link in links if link]
+                if links:
+                    detailed += f"   Links: {' | '.join(links)}\n"
 
                 # Add description if available
                 description = ds_data.get("description", "")
@@ -1455,14 +1483,15 @@ class ESSDiveClient:
         content += f"**id**: {result.get('id', 'Unknown')}\n"
         if doi:
             content += f"**doi**: {doi}\n"
-        if result.get("viewUrl"):
-            content += f"**viewUrl**: {result.get('viewUrl')}\n"
-        if result.get("url"):
-            content += f"**url**: {result.get('url')}\n"
-        if result.get("previous"):
-            content += f"**previous**: {result.get('previous')}\n"
-        if result.get("next"):
-            content += f"**next**: {result.get('next')}\n"
+        links = [
+            _markdown_link("View dataset", result.get("viewUrl")),
+            _markdown_link("API record", result.get("url")),
+            _markdown_link("Previous version", result.get("previous")),
+            _markdown_link("Next version", result.get("next")),
+        ]
+        links = [link for link in links if link]
+        if links:
+            content += f"**links**: {' | '.join(links)}\n"
         if result.get("dateUploaded"):
             content += f"**dateUploaded**: {result.get('dateUploaded')}\n"
         if result.get("dateModified"):
@@ -1624,22 +1653,16 @@ class ESSDiveClient:
 
         versions = results["result"]
         total = results.get("total", 0)
-        user = results.get("user")
+        user_note = _format_result_user_note(results.get("user"))
         header = (
             f"Found {total} visible dataset versions. "
             f"Showing {len(versions)} results from newest to oldest:\n"
         )
-
-        pagination = (
-            "\nPagination:\n"
-            f"  previousCursor: {results.get('previousCursor') or 'None'}\n"
-            f"  nextCursor: {results.get('nextCursor') or 'None'}\n\n"
-        )
-        if user:
-            header += f"User: {user}\n"
+        if user_note:
+            header += f"{user_note}\n"
 
         if format_type == "summary":
-            summary = header + pagination
+            summary = f"{header}\n"
 
             for i, version in enumerate(versions, 1):
                 dataset = version.get("dataset", {})
@@ -1648,24 +1671,26 @@ class ESSDiveClient:
                 summary += f"   ID: {version.get('id', 'Unknown')}\n"
                 if doi:
                     summary += f"   DOI: {doi}\n"
-                if "isPublic" in version:
+                if _should_show_is_public(version.get("isPublic"), results.get("user")):
                     summary += f"   isPublic: {version.get('isPublic')}\n"
                 summary += f"   dateUploaded: {version.get('dateUploaded', 'Unknown')}\n"
                 summary += f"   Published: {dataset.get('datePublished', 'Unknown')}\n"
-                summary += f"   viewUrl: {version.get('viewUrl', 'Unknown')}\n"
-                if version.get("url"):
-                    summary += f"   url: {version.get('url')}\n"
-                if version.get("previous"):
-                    summary += f"   previous: {version.get('previous')}\n"
-                if version.get("next"):
-                    summary += f"   next: {version.get('next')}\n"
+                links = [
+                    _markdown_link("View dataset", version.get("viewUrl")),
+                    _markdown_link("API record", version.get("url")),
+                    _markdown_link("Previous version", version.get("previous")),
+                    _markdown_link("Next version", version.get("next")),
+                ]
+                links = [link for link in links if link]
+                if links:
+                    summary += f"   Links: {' | '.join(links)}\n"
                 if i < len(versions):
                     summary += "\n"
 
             return summary
 
         if format_type == "detailed":
-            detailed = header + pagination
+            detailed = f"{header}\n"
 
             for i, version in enumerate(versions, 1):
                 dataset = version.get("dataset", {})
@@ -1677,13 +1702,17 @@ class ESSDiveClient:
                 detailed += f"   dateUploaded: {version.get('dateUploaded', 'Unknown')}\n"
                 detailed += f"   dateModified: {version.get('dateModified', 'Unknown')}\n"
                 detailed += f"   Published: {dataset.get('datePublished', 'Unknown')}\n"
-                detailed += f"   isPublic: {version.get('isPublic', 'Unknown')}\n"
-                detailed += f"   viewUrl: {version.get('viewUrl', 'Unknown')}\n"
-                detailed += f"   url: {version.get('url', 'Unknown')}\n"
-                if version.get("previous"):
-                    detailed += f"   previous: {version.get('previous')}\n"
-                if version.get("next"):
-                    detailed += f"   next: {version.get('next')}\n"
+                if _should_show_is_public(version.get("isPublic"), results.get("user")):
+                    detailed += f"   isPublic: {version.get('isPublic', 'Unknown')}\n"
+                links = [
+                    _markdown_link("View dataset", version.get("viewUrl")),
+                    _markdown_link("API record", version.get("url")),
+                    _markdown_link("Previous version", version.get("previous")),
+                    _markdown_link("Next version", version.get("next")),
+                ]
+                links = [link for link in links if link]
+                if links:
+                    detailed += f"   Links: {' | '.join(links)}\n"
 
                 description = dataset.get("description", "")
                 if isinstance(description, list):

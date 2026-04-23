@@ -719,6 +719,9 @@ If your client supports direct tool calling, these examples map closely to the a
 search-datasets with query="wildfire recovery" and page_size=5
 search-datasets with query="BIONTE" and sort="name:asc" and page_size=3
 search-datasets with query="BIONTE" and sort="name:asc" and cursor="PASTE_NEXT_CURSOR_HERE"
+search-datasets with query="BIONTE" and sort="name:asc" and page_size=3 and format="raw"
+next-search-page
+previous-search-page
 search-datasets with begin_date="2020" and end_date="2021" and format="detailed"
 search-datasets with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
 search-datasets with lat=38.8747 and lon=-76.5519 and radius=100
@@ -726,8 +729,12 @@ search-datasets with query="East River" and creator_affiliation="Lawrence Berkel
 search-datasets with query="East River" and variable_measured="streamflow" and page_size=5
 search-datasets with query="East River" and funder="NASA" and page_size=5
 get-dataset with id="ess-dive-165671432ae620e-20250908T210722395"
+get-dataset with id="doi:10.15485/2529445" and format="raw"
 get-dataset-versions with id="doi:10.15485/2529445" and page_size=2
 get-dataset-versions with id="doi:10.15485/2529445" and cursor="PASTE_NEXT_CURSOR_HERE"
+next-dataset-versions-page
+previous-dataset-versions-page
+get-dataset-status with id="ess-dive-f78cb03d11550da-20260309T160313214"
 get-dataset-permissions with id="ess-dive-165671432ae620e-20250908T210722395"
 doi-to-essdive-id with doi="10.15485/2587853"
 essdive-id-to-doi with essdive_id="ess-dive-165671432ae620e-20250908T210722395"
@@ -846,6 +853,8 @@ Examples:
 - `Use the essdive-datasets skill to find recent wildfire-related datasets and then fetch the metadata for the best match.`
 - `Use the essdive-datasets skill to search for BIONTE datasets sorted by name ascending and summarize the first three.`
 - `Use the essdive-datasets skill to search for BIONTE datasets, then continue to the next page with the returned cursor.`
+- `Use the essdive-datasets skill to search for BIONTE datasets, keep the pagination cursor, and show me the next page if I ask for more results.`
+- `Use the essdive-datasets skill to search for BIONTE datasets and then show me the next page without exposing the cursor values.`
 - `Use the essdive-datasets skill to list the version history for DOI 10.15485/2529445 and summarize the newest two versions.`
 - `Use the essdive-identifiers skill to normalize DOI https://doi.org/10.15485/2587853 and return the ESS-DIVE ID.`
 - `Use the essdeepdive skill to search for temperature fields and tell me which data file each result comes from.`
@@ -901,8 +910,13 @@ and the observed values range from 19.1 to 26.9 C.
 ### ESS-DIVE dataset tools
 
 - `search-datasets`
+- `next-search-page`
+- `previous-search-page`
 - `get-dataset`
 - `get-dataset-versions`
+- `next-dataset-versions-page`
+- `previous-dataset-versions-page`
+- `get-dataset-status`
 - `get-dataset-permissions`
 - `parse-flmd-file`
 

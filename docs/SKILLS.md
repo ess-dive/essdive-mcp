@@ -126,9 +126,12 @@ To remove them:
 - `Use the essdive-datasets skill to find public ESS-DIVE datasets about wildfire recovery and summarize the top results.`
 - `Use the essdive-datasets skill to search for BIONTE datasets sorted by name ascending and summarize the first three.`
 - `Use the essdive-datasets skill to search for BIONTE datasets, then continue to the next page with the returned cursor.`
+- `Use the essdive-datasets skill to search for BIONTE datasets, keep the pagination cursor, and show me the next page if I ask for more results.`
+- `Use the essdive-datasets skill to search for BIONTE datasets and then show me the next page without exposing the cursor values.`
 - `Use the essdive-datasets skill to search for datasets inside the bounding box [38.9187, -106.9532, 38.9263, -106.9451] and summarize the matches.`
 - `Use the essdive-datasets skill to search for datasets within 100 meters of 38.8747, -76.5519 and summarize the matches.`
 - `Use the essdive-datasets skill to show the version history for DOI 10.15485/2529445 and summarize the newest two versions.`
+- `Use the essdive-datasets skill to check the status of dataset ess-dive-f78cb03d11550da-20260309T160313214.`
 - `Use the essdive-datasets skill to search for East River datasets and then keep only results with Lawrence Berkeley Lab creator affiliations.`
 - `Use the essdive-datasets skill to search for East River datasets and then keep only results where variableMeasured includes streamflow.`
 

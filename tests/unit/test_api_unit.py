@@ -21,6 +21,7 @@ from essdive_mcp.main import (
     _apply_local_dataset_filters,
     _default_dataset_search_is_public,
     _resolve_startup_api_token,
+    PaginationStateStore,
 )
 import pytest
 import os
@@ -94,6 +95,309 @@ class TestDatasetSearchVisibilityDefaults:
     def test_authenticated_search_allows_private_matches(self):
         """Authenticated search should not force the API back to public-only."""
         assert _default_dataset_search_is_public("token-123") is None
+
+
+class TestPaginationStateStore:
+    """Tests for server-side pagination state used by next/previous page tools."""
+
+    def test_search_followup_reuses_stored_filters_and_next_cursor(self):
+        """Next-search-page should reuse the most recent search context."""
+        store = PaginationStateStore()
+
+        store.save_search(
+            session_id="session-a",
+            state_id="request-1",
+            search_kwargs={
+                "text": "soil carbon",
+                "sort": "name:asc",
+                "page_size": 2,
+                "cursor": None,
+                "row_start": 1,
+            },
+            local_filters={"funder": ["DOE"]},
+            format_type="summary",
+            result={"nextCursor": "next-cursor-123", "previousCursor": None},
+        )
+
+        state_id, search_kwargs, local_filters, format_type = store.get_search_followup(
+            "session-a", "next")
+
+        assert state_id == "request-1"
+        assert search_kwargs == {
+            "text": "soil carbon",
+            "sort": "name:asc",
+            "page_size": None,
+            "cursor": "next-cursor-123",
+            "row_start": None,
+        }
+        assert local_filters == {"funder": ["DOE"]}
+        assert format_type == "summary"
+
+    def test_search_followup_allows_format_override(self):
+        """Follow-up search tools may override the stored output format."""
+        store = PaginationStateStore()
+        store.save_search(
+            session_id="session-a",
+            state_id="request-1",
+            search_kwargs={"text": "soil carbon"},
+            local_filters={},
+            format_type="summary",
+            result={"nextCursor": "next-cursor-123", "previousCursor": None},
+        )
+
+        _, _, _, format_type = store.get_search_followup(
+            "session-a", "next", format_override="raw")
+
+        assert format_type == "raw"
+
+    def test_search_followup_requires_existing_state(self):
+        """Paging without a prior search should raise a clear error."""
+        store = PaginationStateStore()
+
+        with pytest.raises(ValueError, match="No prior dataset search"):
+            store.get_search_followup("session-a", "next")
+
+    def test_search_followup_requires_requested_direction_cursor(self):
+        """Paging should fail cleanly when no next/previous cursor exists."""
+        store = PaginationStateStore()
+        store.save_search(
+            session_id="session-a",
+            state_id="request-1",
+            search_kwargs={"text": "soil carbon"},
+            local_filters={},
+            format_type="summary",
+            result={"nextCursor": None, "previousCursor": None},
+        )
+
+        with pytest.raises(ValueError, match="No next page is available"):
+            store.get_search_followup("session-a", "next")
+
+    def test_search_followup_is_scoped_per_session(self):
+        """Pagination state should not leak across sessions."""
+        store = PaginationStateStore()
+        store.save_search(
+            session_id="session-a",
+            state_id="request-a",
+            search_kwargs={"text": "soil carbon"},
+            local_filters={},
+            format_type="summary",
+            result={"nextCursor": "next-a", "previousCursor": None},
+        )
+        store.save_search(
+            session_id="session-b",
+            state_id="request-b",
+            search_kwargs={"text": "wildfire"},
+            local_filters={},
+            format_type="detailed",
+            result={"nextCursor": "next-b", "previousCursor": None},
+        )
+
+        _, kwargs_a, _, format_a = store.get_search_followup("session-a", "next")
+        _, kwargs_b, _, format_b = store.get_search_followup("session-b", "next")
+
+        assert kwargs_a["cursor"] == "next-a"
+        assert kwargs_b["cursor"] == "next-b"
+        assert format_a == "summary"
+        assert format_b == "detailed"
+
+    def test_search_followup_keeps_multiple_chains_within_session(self):
+        """A newer search should become active without deleting earlier chains."""
+        store = PaginationStateStore()
+        store.save_search(
+            session_id="session-a",
+            state_id="request-1",
+            search_kwargs={"text": "soil carbon"},
+            local_filters={},
+            format_type="summary",
+            result={"nextCursor": "next-a", "previousCursor": None},
+        )
+        store.save_search(
+            session_id="session-a",
+            state_id="request-2",
+            search_kwargs={"text": "wildfire"},
+            local_filters={"funder": ["DOE"]},
+            format_type="detailed",
+            result={"nextCursor": "next-b", "previousCursor": None},
+        )
+
+        state_id, kwargs, local_filters, format_type = store.get_search_followup(
+            "session-a", "next"
+        )
+
+        assert sorted(store.search_by_session["session-a"]) == ["request-1", "request-2"]
+        assert state_id == "request-2"
+        assert kwargs["text"] == "wildfire"
+        assert kwargs["cursor"] == "next-b"
+        assert local_filters == {"funder": ["DOE"]}
+        assert format_type == "detailed"
+
+    def test_search_followup_updates_existing_chain_after_followup(self):
+        """Follow-up paging should update the active chain instead of allocating a new one."""
+        store = PaginationStateStore()
+        store.save_search(
+            session_id="session-a",
+            state_id="request-1",
+            search_kwargs={"text": "soil carbon", "page_size": 2},
+            local_filters={},
+            format_type="summary",
+            result={"nextCursor": "next-a", "previousCursor": None},
+        )
+        state_id, kwargs, local_filters, format_type = store.get_search_followup(
+            "session-a", "next"
+        )
+
+        store.save_search(
+            session_id="session-a",
+            state_id=state_id,
+            search_kwargs=kwargs,
+            local_filters=local_filters,
+            format_type=format_type,
+            result={"nextCursor": "next-b", "previousCursor": "prev-b"},
+        )
+
+        assert list(store.search_by_session["session-a"]) == ["request-1"]
+        _, kwargs_after, _, _ = store.get_search_followup("session-a", "next")
+        assert kwargs_after["cursor"] == "next-b"
+
+    def test_versions_followup_reuses_identifier_and_cursor(self):
+        """Next/previous version-page tools should reuse the last versions request."""
+        store = PaginationStateStore()
+        store.save_versions(
+            session_id="session-a",
+            state_id="request-1",
+            identifier="doi:10.1234/example",
+            format_type="detailed",
+            result={"nextCursor": "next-version-cursor", "previousCursor": None},
+        )
+
+        state_id, identifier, cursor, format_type = store.get_versions_followup(
+            "session-a", "next")
+
+        assert state_id == "request-1"
+        assert identifier == "doi:10.1234/example"
+        assert cursor == "next-version-cursor"
+        assert format_type == "detailed"
+
+    def test_versions_followup_requires_existing_state(self):
+        """Paging versions without a prior request should raise a clear error."""
+        store = PaginationStateStore()
+
+        with pytest.raises(ValueError, match="No prior dataset-version request"):
+            store.get_versions_followup("session-a", "next")
+
+    def test_versions_followup_is_scoped_per_session(self):
+        """Version pagination state should not leak across sessions."""
+        store = PaginationStateStore()
+        store.save_versions(
+            session_id="session-a",
+            state_id="request-a",
+            identifier="doi:10.1234/example-a",
+            format_type="summary",
+            result={"nextCursor": "next-a", "previousCursor": None},
+        )
+        store.save_versions(
+            session_id="session-b",
+            state_id="request-b",
+            identifier="doi:10.1234/example-b",
+            format_type="raw",
+            result={"nextCursor": "next-b", "previousCursor": None},
+        )
+
+        _, identifier_a, cursor_a, format_a = store.get_versions_followup(
+            "session-a", "next")
+        _, identifier_b, cursor_b, format_b = store.get_versions_followup(
+            "session-b", "next")
+
+        assert identifier_a == "doi:10.1234/example-a"
+        assert cursor_a == "next-a"
+        assert format_a == "summary"
+        assert identifier_b == "doi:10.1234/example-b"
+        assert cursor_b == "next-b"
+        assert format_b == "raw"
+
+    def test_versions_followup_keeps_multiple_chains_within_session(self):
+        """Multiple version-history chains should coexist within one session."""
+        store = PaginationStateStore()
+        store.save_versions(
+            session_id="session-a",
+            state_id="request-1",
+            identifier="doi:10.1234/example-a",
+            format_type="summary",
+            result={"nextCursor": "next-a", "previousCursor": None},
+        )
+        store.save_versions(
+            session_id="session-a",
+            state_id="request-2",
+            identifier="doi:10.1234/example-b",
+            format_type="raw",
+            result={"nextCursor": "next-b", "previousCursor": None},
+        )
+
+        state_id, identifier, cursor, format_type = store.get_versions_followup(
+            "session-a", "next"
+        )
+
+        assert sorted(store.versions_by_session["session-a"]) == ["request-1", "request-2"]
+        assert state_id == "request-2"
+        assert identifier == "doi:10.1234/example-b"
+        assert cursor == "next-b"
+        assert format_type == "raw"
+
+    def test_expired_entries_are_pruned(self):
+        """Idle session state should expire after the configured timeout."""
+        current_time = 100.0
+
+        def fake_time() -> float:
+            return current_time
+
+        store = PaginationStateStore(ttl_seconds=30.0, time_fn=fake_time)
+        store.save_search(
+            session_id="session-a",
+            state_id="request-1",
+            search_kwargs={"text": "soil carbon"},
+            local_filters={},
+            format_type="summary",
+            result={"nextCursor": "next-a", "previousCursor": None},
+        )
+        store.save_versions(
+            session_id="session-a",
+            state_id="request-2",
+            identifier="doi:10.1234/example-a",
+            format_type="raw",
+            result={"nextCursor": "next-b", "previousCursor": None},
+        )
+
+        current_time = 131.0
+
+        assert store.prune_expired() == 2
+        with pytest.raises(ValueError, match="No prior dataset search"):
+            store.get_search_followup("session-a", "next")
+        with pytest.raises(ValueError, match="No prior dataset-version request"):
+            store.get_versions_followup("session-a", "next")
+
+    def test_clear_session_removes_search_and_version_state(self):
+        """Explicit session cleanup should drop all pagination data for that session."""
+        store = PaginationStateStore()
+        store.save_search(
+            session_id="session-a",
+            state_id="request-1",
+            search_kwargs={"text": "soil carbon"},
+            local_filters={},
+            format_type="summary",
+            result={"nextCursor": "next-a", "previousCursor": None},
+        )
+        store.save_versions(
+            session_id="session-a",
+            state_id="request-2",
+            identifier="doi:10.1234/example-a",
+            format_type="raw",
+            result={"nextCursor": "next-b", "previousCursor": None},
+        )
+
+        store.clear_session("session-a")
+
+        assert "session-a" not in store.search_by_session
+        assert "session-a" not in store.versions_by_session
 
 
 class TestToolErrorPayload:
@@ -469,6 +773,76 @@ class TestESSDiveClient:
             assert "rowStart" not in params
 
     @pytest.mark.asyncio
+    async def test_search_datasets_cursor_followup_flow_uses_returned_next_cursor(self):
+        """A first page's nextCursor should work unchanged for a follow-up page request."""
+        client = ESSDiveClient(api_token="test_token")
+
+        first_response = {
+            "total": 3,
+            "pageSize": 2,
+            "nextCursor": "next-cursor-123",
+            "previousCursor": None,
+            "query": {"text": "soil carbon", "sort": "name:asc"},
+            "result": [
+                {"id": "ds1", "dataset": {"name": "Dataset 1"}},
+                {"id": "ds2", "dataset": {"name": "Dataset 2"}},
+            ],
+        }
+        second_response = {
+            "total": 3,
+            "pageSize": 2,
+            "nextCursor": None,
+            "previousCursor": "prev-cursor-123",
+            "query": {"text": "soil carbon", "sort": "name:asc"},
+            "result": [
+                {"id": "ds3", "dataset": {"name": "Dataset 3"}},
+            ],
+        }
+
+        first_response_obj = Mock()
+        first_response_obj.json.return_value = first_response
+        first_response_obj.raise_for_status = Mock()
+
+        second_response_obj = Mock()
+        second_response_obj.json.return_value = second_response
+        second_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                side_effect=[first_response_obj, second_response_obj]
+            )
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            first_page = await client.search_datasets(
+                text="soil carbon",
+                page_size=2,
+                sort="name:asc",
+            )
+            second_page = await client.search_datasets(
+                text="soil carbon",
+                sort="name:asc",
+                cursor=first_page["nextCursor"],
+            )
+
+            assert first_page["nextCursor"] == "next-cursor-123"
+            assert second_page["result"][0]["id"] == "ds3"
+            assert second_page["previousCursor"] == "prev-cursor-123"
+
+            first_params = mock_client_instance.get.call_args_list[0].kwargs["params"]
+            second_params = mock_client_instance.get.call_args_list[1].kwargs["params"]
+            assert first_params["pageSize"] == 2
+            assert first_params["text"] == "soil carbon"
+            assert first_params["sort"] == "name:asc"
+            assert second_params == {
+                "cursor": "next-cursor-123",
+                "text": "soil carbon",
+                "sort": "name:asc",
+            }
+
+    @pytest.mark.asyncio
     async def test_search_datasets_accepts_string_bbox(self):
         """bbox may be provided in the API's comma-delimited string format."""
         client = ESSDiveClient(api_token="test_token")
@@ -805,6 +1179,66 @@ class TestESSDiveClient:
             assert params == {"cursor": "cursor-123"}
 
     @pytest.mark.asyncio
+    async def test_get_dataset_versions_cursor_followup_flow_uses_returned_next_cursor(self):
+        """A versions response nextCursor should work unchanged for a follow-up page request."""
+        client = ESSDiveClient(api_token="test_token")
+
+        first_response = {
+            "total": 3,
+            "pageSize": 2,
+            "nextCursor": "next-version-cursor",
+            "previousCursor": None,
+            "result": [
+                {"id": "ds-v3", "dataset": {"@id": "doi:10.1234/example"}},
+                {"id": "ds-v2", "dataset": {"@id": "doi:10.1234/example"}},
+            ],
+        }
+        second_response = {
+            "total": 3,
+            "pageSize": 2,
+            "nextCursor": None,
+            "previousCursor": "prev-version-cursor",
+            "result": [
+                {"id": "ds-v1", "dataset": {"@id": "doi:10.1234/example"}},
+            ],
+        }
+
+        first_response_obj = Mock()
+        first_response_obj.json.return_value = first_response
+        first_response_obj.raise_for_status = Mock()
+
+        second_response_obj = Mock()
+        second_response_obj.json.return_value = second_response
+        second_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                side_effect=[first_response_obj, second_response_obj]
+            )
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            first_page = await client.get_dataset_versions(
+                "doi:10.1234/example",
+                page_size=2,
+            )
+            second_page = await client.get_dataset_versions(
+                "doi:10.1234/example",
+                cursor=first_page["nextCursor"],
+            )
+
+            assert first_page["nextCursor"] == "next-version-cursor"
+            assert second_page["result"][0]["id"] == "ds-v1"
+            assert second_page["previousCursor"] == "prev-version-cursor"
+
+            first_params = mock_client_instance.get.call_args_list[0].kwargs["params"]
+            second_params = mock_client_instance.get.call_args_list[1].kwargs["params"]
+            assert first_params == {"pageSize": 2}
+            assert second_params == {"cursor": "next-version-cursor"}
+
+    @pytest.mark.asyncio
     async def test_get_dataset_status(self):
         """Test get_dataset_status method."""
         client = ESSDiveClient(api_token="test_token")
@@ -881,11 +1315,16 @@ class TestFormatResults:
             "result": [
                 {
                     "id": "ds1",
+                    "isPublic": True,
+                    "url": "https://api.example.com/packages/ds1",
+                    "previous": "https://api.example.com/packages/ds0",
+                    "next": "https://api.example.com/packages/ds2",
                     "dataset": {"name": "Dataset 1", "datePublished": "2024-01-01"},
                     "viewUrl": "https://example.com/ds1"
                 }
             ],
-            "total": 1
+            "total": 1,
+            "user": "anonymous",
         }
 
         formatted = client.format_results(results, "summary")
@@ -893,6 +1332,14 @@ class TestFormatResults:
         assert isinstance(formatted, str)
         assert "Dataset 1" in formatted
         assert "ds1" in formatted
+        assert "isPublic: True" not in formatted
+        assert "Results include public data only." in formatted
+        assert (
+            "Links: [View dataset](https://example.com/ds1) | "
+            "[API record](https://api.example.com/packages/ds1) | "
+            "[Previous version](https://api.example.com/packages/ds0) | "
+            "[Next version](https://api.example.com/packages/ds2)"
+        ) in formatted
 
     def test_format_results_summary_with_local_filtering(self):
         """Summary format should mention local metadata filtering when used."""
@@ -939,8 +1386,8 @@ class TestFormatResults:
 
         assert "Sort: name:asc" in formatted
 
-    def test_format_results_summary_includes_cursor_pagination(self):
-        """Summary format should expose next/previous cursors when present."""
+    def test_format_results_summary_omits_cursor_pagination(self):
+        """Summary format should not expose raw cursor values."""
         client = ESSDiveClient()
 
         results = {
@@ -958,7 +1405,8 @@ class TestFormatResults:
 
         formatted = client.format_results(results, "summary")
 
-        assert "Pagination: previousCursor=None; nextCursor=next-cursor" in formatted
+        assert "Pagination:" not in formatted
+        assert "next-cursor" not in formatted
 
     def test_format_results_detailed_with_extra_metadata(self):
         """Detailed format should surface richer dataset metadata when present."""
@@ -968,6 +1416,13 @@ class TestFormatResults:
             "result": [
                 {
                     "id": "ds1",
+                    "isPublic": True,
+                    "url": "https://api.example.com/packages/ds1",
+                    "previous": "https://api.example.com/packages/ds0",
+                    "next": "https://api.example.com/packages/ds2",
+                    "dateUploaded": "2024-01-02T00:00:00Z",
+                    "dateModified": "2024-01-03T00:00:00Z",
+                    "citation": "Example dataset citation",
                     "dataset": {
                         "name": "Dataset 1",
                         "datePublished": "2024-01-01",
@@ -986,22 +1441,46 @@ class TestFormatResults:
                         "measurementTechnique": ["Automated snow-depth sensor"],
                         "funder": [{"name": "DOE"}],
                         "license": "https://creativecommons.org/licenses/by/4.0/",
+                        "provider": {
+                            "name": "Example Program",
+                            "member": {
+                                "givenName": "Ada",
+                                "familyName": "Lovelace",
+                                "jobTitle": "principalInvestigator",
+                                "affiliation": "Example Lab",
+                            },
+                        },
+                        "award": ["DOE Award #12345"],
                     },
                     "viewUrl": "https://example.com/ds1",
                 }
             ],
             "total": 1,
+            "user": "anonymous",
         }
 
         formatted = client.format_results(results, "detailed")
 
         assert "Alternate Names" in formatted
+        assert "isPublic: True" not in formatted
+        assert "Results include public data only." in formatted
+        assert "dateUploaded: 2024-01-02T00:00:00Z" in formatted
+        assert "dateModified: 2024-01-03T00:00:00Z" in formatted
+        assert (
+            "Links: [View dataset](https://example.com/ds1) | "
+            "[API record](https://api.example.com/packages/ds1) | "
+            "[Previous version](https://api.example.com/packages/ds0) | "
+            "[Next version](https://api.example.com/packages/ds2)"
+        ) in formatted
         assert "Temporal Coverage: 2020-01-01 to 2020-12-31" in formatted
         assert "Spatial Coverage: Pennsylvania (41.0, -77.5)" in formatted
         assert "Variables Measured: snow water equivalent" in formatted
         assert "Measurement Techniques: Automated snow-depth sensor" in formatted
         assert "Funders: DOE" in formatted
         assert "License: https://creativecommons.org/licenses/by/4.0/" in formatted
+        assert "Provider: Example Program (Ada Lovelace, principalInvestigator, Example Lab)" in formatted
+        assert "Award: DOE Award #12345" in formatted
+        assert "citation: Example dataset citation" in formatted
 
     def test_format_results_no_results(self):
         """Test formatting when no results are found."""
@@ -1012,6 +1491,77 @@ class TestFormatResults:
         formatted = client.format_results(results, "summary")
 
         assert "No results found" in formatted
+
+    def test_format_dataset_raw(self):
+        """Raw dataset format should return unchanged results."""
+        client = ESSDiveClient()
+        results = {"id": "ds1", "dataset": {"name": "Dataset 1"}, "isPublic": True}
+
+        formatted = client.format_dataset(results, "raw")
+
+        assert formatted == results
+
+    def test_format_dataset_detailed_includes_top_level_package_fields(self):
+        """Detailed dataset format should expose top-level package metadata."""
+        client = ESSDiveClient()
+
+        results = {
+            "id": "ds1",
+            "viewUrl": "https://example.com/ds1",
+            "url": "https://api.example.com/packages/ds1",
+            "previous": "https://api.example.com/packages/ds0",
+            "next": "https://api.example.com/packages/ds2",
+            "dateUploaded": "2024-01-02T00:00:00Z",
+            "dateModified": "2024-01-03T00:00:00Z",
+            "isPublic": True,
+            "citation": "Example dataset citation",
+            "dataset": {
+                "name": "Dataset 1",
+                "@id": "doi:10.15485/example",
+                "datePublished": "2024-01-01",
+                "description": "A test dataset",
+                "provider": {
+                    "name": "Example Program",
+                    "member": {
+                        "givenName": "Ada",
+                        "familyName": "Lovelace",
+                        "jobTitle": "principalInvestigator",
+                        "affiliation": "Example Lab",
+                    },
+                },
+                "award": ["DOE Award #12345"],
+                "distribution": [
+                    {
+                        "name": "data.csv",
+                        "contentSize": 12,
+                        "encodingFormat": "text/csv",
+                        "contentUrl": "https://example.com/data.csv",
+                        "identifier": "file-1",
+                    }
+                ],
+            },
+        }
+
+        formatted = client.format_dataset(results, "detailed")
+
+        assert "**id**: ds1" in formatted
+        assert "**doi**: doi:10.15485/example" in formatted
+        assert (
+            "**links**: [View dataset](https://example.com/ds1) | "
+            "[API record](https://api.example.com/packages/ds1) | "
+            "[Previous version](https://api.example.com/packages/ds0) | "
+            "[Next version](https://api.example.com/packages/ds2)"
+        ) in formatted
+        assert "**dateUploaded**: 2024-01-02T00:00:00Z" in formatted
+        assert "**dateModified**: 2024-01-03T00:00:00Z" in formatted
+        assert "**isPublic**: True" in formatted
+        assert "**citation**: Example dataset citation" in formatted
+        assert "## Provider" in formatted
+        assert "Example Program (Ada Lovelace, principalInvestigator, Example Lab)" in formatted
+        assert "## Award" in formatted
+        assert "DOE Award #12345" in formatted
+        assert "## Data Files" in formatted
+        assert "data.csv" in formatted
 
     def test_format_dataset_versions_raw(self):
         """Raw version format should return unchanged results."""
@@ -1031,10 +1581,15 @@ class TestFormatResults:
             "pageSize": 2,
             "nextCursor": "next-cursor",
             "previousCursor": None,
+            "user": "anonymous",
             "result": [
                 {
                     "id": "ds-v2",
+                    "isPublic": True,
                     "viewUrl": "https://example.com/ds-v2",
+                    "url": "https://api.example.com/packages/ds-v2",
+                    "previous": "https://api.example.com/packages/ds-v1",
+                    "next": "https://api.example.com/packages/ds-v3",
                     "dateUploaded": "2026-01-01T00:00:00Z",
                     "dataset": {
                         "name": "Dataset 1 v2",
@@ -1049,8 +1604,18 @@ class TestFormatResults:
 
         assert isinstance(formatted, str)
         assert "Found 2 visible dataset versions" in formatted
-        assert "nextCursor: next-cursor" in formatted
+        assert "Results include public data only." in formatted
+        assert "Pagination:" not in formatted
+        assert "next-cursor" not in formatted
         assert "ds-v2" in formatted
+        assert "isPublic: True" not in formatted
+        assert "dateUploaded: 2026-01-01T00:00:00Z" in formatted
+        assert (
+            "Links: [View dataset](https://example.com/ds-v2) | "
+            "[API record](https://api.example.com/packages/ds-v2) | "
+            "[Previous version](https://api.example.com/packages/ds-v1) | "
+            "[Next version](https://api.example.com/packages/ds-v3)"
+        ) in formatted
 
     def test_format_dataset_versions_detailed(self):
         """Detailed version format should surface citation and neighbor links."""
@@ -1061,6 +1626,7 @@ class TestFormatResults:
             "pageSize": 1,
             "nextCursor": None,
             "previousCursor": None,
+            "user": "anonymous",
             "result": [
                 {
                     "id": "ds-v2",
@@ -1084,7 +1650,17 @@ class TestFormatResults:
 
         formatted = client.format_dataset_versions(results, "detailed")
 
-        assert "Example Citation" in formatted
+        assert "Results include public data only." in formatted
+        assert "citation: Example Citation" in formatted
+        assert "isPublic: True" not in formatted
+        assert "dateUploaded: 2026-01-01T00:00:00Z" in formatted
+        assert "dateModified: 2026-01-02T00:00:00Z" in formatted
+        assert (
+            "Links: [View dataset](https://example.com/ds-v2) | "
+            "[API record](https://api.example.com/packages/ds-v2) | "
+            "[Previous version](https://api.example.com/packages/ds-v1) | "
+            "[Next version](https://api.example.com/packages/ds-v3)"
+        ) in formatted
         assert "Newer Version URL" in formatted
         assert "Older Version URL" in formatted
 

@@ -12,10 +12,17 @@ MCP Tools Available:
     provider, publication date, temporal coverage, keywords, geographic bounds/nearby
     search, and local metadata-aware post-filters for fields exposed on full dataset
     records. Supports pagination and multiple result formats.
-  - get-dataset: Retrieve detailed metadata for a specific dataset including creators,
-    keywords, description, and available data files.
+  - next-search-page / previous-search-page: Navigate the most recent dataset-search
+    result set without exposing raw pagination cursors.
+  - get-dataset: Retrieve detailed metadata for a specific dataset, including top-level
+    package fields such as isPublic, dateUploaded, dateModified, citation, and
+    available data files.
   - get-dataset-versions: List visible versions of a dataset from newest to oldest,
     with cursor-based pagination support for version history navigation.
+  - next-dataset-versions-page / previous-dataset-versions-page: Navigate the most
+    recent dataset-version history request without exposing raw pagination cursors.
+  - get-dataset-status: Get workflow/status metadata for a dataset from the
+    /packages/{identifier}/status endpoint.
   - get-dataset-permissions: Get sharing and access permission information for datasets.
 
 **Identifier Conversion:**
@@ -55,21 +62,28 @@ import csv
 import re
 import logging
 import traceback
+from contextlib import asynccontextmanager, suppress
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from threading import RLock
+from time import monotonic
 import requests
 from io import StringIO
-from typing import Dict, List, Optional, Any, Union, Awaitable, TypeVar
+from typing import Dict, List, Optional, Any, Union, Awaitable, Callable, TypeVar
 import httpx
 import yaml
 from urllib.parse import quote
 from urllib.parse import quote as url_quote
 
 from fastmcp import FastMCP
+from fastmcp.server.context import Context
 
 
 LOGGER = logging.getLogger("essdive_mcp")
 REQUEST_TIMEOUT_SECONDS = 30.0
+PAGINATION_STATE_TTL_SECONDS = 1800.0
+PAGINATION_STATE_CLEANUP_INTERVAL_SECONDS = 60.0
 T = TypeVar("T")
 PROJECT_PORTALS_PATH = (
     Path(__file__).resolve().parents[2]
@@ -368,6 +382,332 @@ def _organization_search_strings(organization: Dict[str, Any]) -> List[str]:
     values.extend(_as_string_list(organization.get("email")))
     values.extend(_as_string_list(organization.get("@id")))
     return values
+
+
+def _summarize_provider(provider: Any) -> List[str]:
+    """Return readable provider summaries from dataset metadata."""
+    summaries: List[str] = []
+
+    for item in _as_list(provider):
+        if isinstance(item, dict):
+            name = str(item.get("name") or "").strip()
+            member = item.get("member")
+
+            member_labels: List[str] = []
+            for member_item in _as_list(member):
+                if isinstance(member_item, dict):
+                    member_name = _person_display_name(member_item)
+                    job_title = str(member_item.get("jobTitle") or "").strip()
+                    affiliation = str(member_item.get("affiliation") or "").strip()
+                    parts = [part for part in [member_name, job_title, affiliation] if part]
+                    if parts:
+                        member_labels.append(", ".join(parts))
+                else:
+                    text = str(member_item).strip()
+                    if text:
+                        member_labels.append(text)
+
+            label = name or ", ".join(_organization_search_strings(item))
+            if member_labels:
+                if label:
+                    label = f"{label} ({'; '.join(member_labels)})"
+                else:
+                    label = "; ".join(member_labels)
+            if label:
+                summaries.append(label)
+            continue
+
+        text = str(item).strip()
+        if text:
+            summaries.append(text)
+
+    return summaries
+
+
+def _format_result_user_note(user: Any) -> Optional[str]:
+    """Return a human-readable visibility note derived from the API user field."""
+    if user is None:
+        return None
+
+    user_text = str(user).strip()
+    if not user_text:
+        return None
+    if user_text == "anonymous":
+        return "Results include public data only."
+    return f"User: {user_text}"
+
+
+def _should_show_is_public(value: Any, user: Any) -> bool:
+    """Hide redundant public flags for anonymous result sets."""
+    if value is None:
+        return False
+    user_text = str(user).strip() if user is not None else ""
+    if user_text == "anonymous" and value is True:
+        return False
+    return True
+
+
+def _markdown_link(label: str, url: Optional[str]) -> Optional[str]:
+    """Return a Markdown link when a URL is available."""
+    if not url:
+        return None
+    return f"[{label}]({url})"
+
+
+@dataclass
+class SearchPaginationState:
+    """State needed to continue paging through a dataset search."""
+
+    search_kwargs: Dict[str, Any]
+    local_filters: Dict[str, List[str]]
+    format_type: str
+    next_cursor: Optional[str]
+    previous_cursor: Optional[str]
+    last_touched_monotonic: float
+
+
+@dataclass
+class VersionsPaginationState:
+    """State needed to continue paging through dataset versions."""
+
+    identifier: str
+    format_type: str
+    next_cursor: Optional[str]
+    previous_cursor: Optional[str]
+    last_touched_monotonic: float
+
+
+class PaginationStateStore:
+    """Track per-session pagination chains with idle expiry."""
+
+    def __init__(
+        self,
+        *,
+        ttl_seconds: float = PAGINATION_STATE_TTL_SECONDS,
+        time_fn: Callable[[], float] = monotonic,
+    ) -> None:
+        self.search_by_session: Dict[str, Dict[str, SearchPaginationState]] = {}
+        self.active_search_by_session: Dict[str, str] = {}
+        self.versions_by_session: Dict[str, Dict[str, VersionsPaginationState]] = {}
+        self.active_versions_by_session: Dict[str, str] = {}
+        self._ttl_seconds = ttl_seconds
+        self._time_fn = time_fn
+        self._lock = RLock()
+
+    def clear_session(self, session_id: str) -> None:
+        """Remove all stored pagination state for a single session."""
+        with self._lock:
+            self.search_by_session.pop(session_id, None)
+            self.active_search_by_session.pop(session_id, None)
+            self.versions_by_session.pop(session_id, None)
+            self.active_versions_by_session.pop(session_id, None)
+
+    def clear_all(self) -> None:
+        """Remove all stored pagination state."""
+        with self._lock:
+            self.search_by_session.clear()
+            self.active_search_by_session.clear()
+            self.versions_by_session.clear()
+            self.active_versions_by_session.clear()
+
+    def prune_expired(self) -> int:
+        """Remove idle pagination state and return the number of entries deleted."""
+        with self._lock:
+            return self._prune_expired_locked(self._time_fn())
+
+    def _prune_expired_locked(self, now: float) -> int:
+        expired_count = 0
+
+        for session_id, states in list(self.search_by_session.items()):
+            for state_id, state in list(states.items()):
+                if now - state.last_touched_monotonic >= self._ttl_seconds:
+                    del states[state_id]
+                    expired_count += 1
+            active_state_id = self.active_search_by_session.get(session_id)
+            if active_state_id and active_state_id not in states:
+                self.active_search_by_session.pop(session_id, None)
+            if not states:
+                self.search_by_session.pop(session_id, None)
+
+        for session_id, states in list(self.versions_by_session.items()):
+            for state_id, state in list(states.items()):
+                if now - state.last_touched_monotonic >= self._ttl_seconds:
+                    del states[state_id]
+                    expired_count += 1
+            active_state_id = self.active_versions_by_session.get(session_id)
+            if active_state_id and active_state_id not in states:
+                self.active_versions_by_session.pop(session_id, None)
+            if not states:
+                self.versions_by_session.pop(session_id, None)
+
+        return expired_count
+
+    def save_search(
+        self,
+        *,
+        session_id: str,
+        state_id: str,
+        search_kwargs: Dict[str, Any],
+        local_filters: Dict[str, List[str]],
+        format_type: str,
+        result: Dict[str, Any],
+    ) -> None:
+        base_kwargs = dict(search_kwargs)
+        base_kwargs["cursor"] = None
+        base_kwargs["row_start"] = None
+
+        now = self._time_fn()
+        with self._lock:
+            self._prune_expired_locked(now)
+            session_states = self.search_by_session.setdefault(session_id, {})
+            session_states[state_id] = SearchPaginationState(
+                search_kwargs=base_kwargs,
+                local_filters={key: list(values) for key, values in local_filters.items()},
+                format_type=format_type,
+                next_cursor=result.get("nextCursor"),
+                previous_cursor=result.get("previousCursor"),
+                last_touched_monotonic=now,
+            )
+            self.active_search_by_session[session_id] = state_id
+
+    def get_search_followup(
+        self,
+        session_id: str,
+        direction: str,
+        *,
+        format_override: Optional[str] = None,
+    ) -> tuple[str, Dict[str, Any], Dict[str, List[str]], str]:
+        now = self._time_fn()
+        with self._lock:
+            self._prune_expired_locked(now)
+            active_state_id = self.active_search_by_session.get(session_id)
+            session_states = self.search_by_session.get(session_id) or {}
+            search_state = (
+                session_states.get(active_state_id) if active_state_id else None
+            )
+            if not search_state:
+                raise ValueError("No prior dataset search is available for pagination.")
+
+            cursor = (
+                search_state.next_cursor
+                if direction == "next"
+                else search_state.previous_cursor
+            )
+            if not cursor:
+                raise ValueError(
+                    f"No {direction} page is available for the most recent dataset search."
+                )
+
+            search_state.last_touched_monotonic = now
+            followup_kwargs = dict(search_state.search_kwargs)
+            followup_kwargs["cursor"] = cursor
+            followup_kwargs["row_start"] = None
+            followup_kwargs["page_size"] = None
+            return (
+                active_state_id,
+                followup_kwargs,
+                {
+                    key: list(values)
+                    for key, values in search_state.local_filters.items()
+                },
+                format_override or search_state.format_type,
+            )
+
+    def save_versions(
+        self,
+        *,
+        session_id: str,
+        state_id: str,
+        identifier: str,
+        format_type: str,
+        result: Dict[str, Any],
+    ) -> None:
+        now = self._time_fn()
+        with self._lock:
+            self._prune_expired_locked(now)
+            session_states = self.versions_by_session.setdefault(session_id, {})
+            session_states[state_id] = VersionsPaginationState(
+                identifier=identifier,
+                format_type=format_type,
+                next_cursor=result.get("nextCursor"),
+                previous_cursor=result.get("previousCursor"),
+                last_touched_monotonic=now,
+            )
+            self.active_versions_by_session[session_id] = state_id
+
+    def get_versions_followup(
+        self,
+        session_id: str,
+        direction: str,
+        *,
+        format_override: Optional[str] = None,
+    ) -> tuple[str, str, str, str]:
+        now = self._time_fn()
+        with self._lock:
+            self._prune_expired_locked(now)
+            active_state_id = self.active_versions_by_session.get(session_id)
+            session_states = self.versions_by_session.get(session_id) or {}
+            versions_state = (
+                session_states.get(active_state_id) if active_state_id else None
+            )
+            if not versions_state:
+                raise ValueError(
+                    "No prior dataset-version request is available for pagination."
+                )
+
+            cursor = (
+                versions_state.next_cursor
+                if direction == "next"
+                else versions_state.previous_cursor
+            )
+            if not cursor:
+                raise ValueError(
+                    f"No {direction} page is available for the most recent dataset-version request."
+                )
+
+            versions_state.last_touched_monotonic = now
+            return (
+                active_state_id,
+                versions_state.identifier,
+                cursor,
+                format_override or versions_state.format_type,
+            )
+
+
+async def _run_pagination_state_cleanup(
+    pagination_store: PaginationStateStore,
+    *,
+    interval_seconds: float = PAGINATION_STATE_CLEANUP_INTERVAL_SECONDS,
+) -> None:
+    """Periodically evict idle pagination state while the server is running."""
+    while True:
+        await asyncio.sleep(interval_seconds)
+        expired_entries = pagination_store.prune_expired()
+        if expired_entries:
+            LOGGER.debug("Expired %s idle pagination-state entries", expired_entries)
+
+
+async def _execute_dataset_search_request(
+    client: "ESSDiveClient",
+    *,
+    search_kwargs: Dict[str, Any],
+    local_filters: Dict[str, List[str]],
+) -> Dict[str, Any]:
+    """Run an ESS-DIVE search and apply any local metadata filters."""
+    result = await client.search_datasets(**search_kwargs)
+    return await _apply_local_dataset_filters(client, result, local_filters)
+
+
+def _render_formatted_output(
+    formatted: Union[str, Dict[str, Any]],
+    format_type: str,
+) -> str:
+    """Serialize formatted MCP tool output."""
+    if format_type == "raw":
+        return json.dumps(formatted, indent=2)
+    if isinstance(formatted, dict):
+        return json.dumps(formatted, indent=2)
+    return str(formatted)
 
 
 def _distribution_search_strings(
@@ -1236,7 +1576,7 @@ class ESSDiveClient:
         query = results.get("query", {}) if isinstance(
             results.get("query"), dict) else {}
         sort_value = query.get("sort")
-        has_cursor_pagination = "nextCursor" in results or "previousCursor" in results
+        user_note = _format_result_user_note(results.get("user"))
 
         if filtering:
             native_total = filtering.get("native_total")
@@ -1253,11 +1593,8 @@ class ESSDiveClient:
 
         if sort_value:
             header += f"Sort: {sort_value}\n\n"
-        if has_cursor_pagination:
-            header += (
-                f"Pagination: previousCursor={results.get('previousCursor') or 'None'}; "
-                f"nextCursor={results.get('nextCursor') or 'None'}\n\n"
-            )
+        if user_note:
+            header += f"{user_note}\n\n"
 
         if format_type == "summary":
             summary = header
@@ -1266,8 +1603,18 @@ class ESSDiveClient:
                 ds_data = dataset.get("dataset", {})
                 summary += f"{i}. {ds_data.get('name', 'Untitled')}\n"
                 summary += f"   ID: {dataset.get('id', 'Unknown')}\n"
+                if _should_show_is_public(dataset.get("isPublic"), results.get("user")):
+                    summary += f"   isPublic: {dataset.get('isPublic')}\n"
                 summary += f"   Published: {ds_data.get('datePublished', 'Unknown')}\n"
-                summary += f"   URL: {dataset.get('viewUrl', 'Unknown')}\n"
+                links = [
+                    _markdown_link("View dataset", dataset.get("viewUrl")),
+                    _markdown_link("API record", dataset.get("url")),
+                    _markdown_link("Previous version", dataset.get("previous")),
+                    _markdown_link("Next version", dataset.get("next")),
+                ]
+                links = [link for link in links if link]
+                if links:
+                    summary += f"   Links: {' | '.join(links)}\n"
                 if i < len(datasets):
                     summary += "\n"
 
@@ -1280,8 +1627,22 @@ class ESSDiveClient:
                 ds_data = dataset.get("dataset", {})
                 detailed += f"{i}. {ds_data.get('name', 'Untitled')}\n"
                 detailed += f"   ID: {dataset.get('id', 'Unknown')}\n"
+                if _should_show_is_public(dataset.get("isPublic"), results.get("user")):
+                    detailed += f"   isPublic: {dataset.get('isPublic')}\n"
+                if dataset.get("dateUploaded"):
+                    detailed += f"   dateUploaded: {dataset.get('dateUploaded')}\n"
+                if dataset.get("dateModified"):
+                    detailed += f"   dateModified: {dataset.get('dateModified')}\n"
                 detailed += f"   Published: {ds_data.get('datePublished', 'Unknown')}\n"
-                detailed += f"   URL: {dataset.get('viewUrl', 'Unknown')}\n"
+                links = [
+                    _markdown_link("View dataset", dataset.get("viewUrl")),
+                    _markdown_link("API record", dataset.get("url")),
+                    _markdown_link("Previous version", dataset.get("previous")),
+                    _markdown_link("Next version", dataset.get("next")),
+                ]
+                links = [link for link in links if link]
+                if links:
+                    detailed += f"   Links: {' | '.join(links)}\n"
 
                 # Add description if available
                 description = ds_data.get("description", "")
@@ -1340,12 +1701,203 @@ class ESSDiveClient:
                 if license_value:
                     detailed += f"   License: {license_value}\n"
 
+                providers = _summarize_provider(ds_data.get("provider"))
+                if providers:
+                    detailed += f"   Provider: {'; '.join(providers)}\n"
+
+                awards = _as_string_list(ds_data.get("award"))
+                if awards:
+                    detailed += f"   Award: {', '.join(awards)}\n"
+
+                citation = dataset.get("citation")
+                if citation:
+                    detailed += f"   citation: {citation}\n"
+
                 if i < len(datasets):
                     detailed += "\n"
 
             return detailed
 
         return results
+
+    def format_dataset(
+        self, result: Dict[str, Any], format_type: str = "detailed"
+    ) -> Union[str, Dict[str, Any]]:
+        """
+        Format a single dataset record into a readable summary.
+
+        Args:
+            result: The API response from GET /packages/{identifier}
+            format_type: Type of formatting ('summary', 'detailed', 'raw')
+
+        Returns:
+            Formatted dataset metadata as string or dict
+        """
+        if format_type == "raw":
+            return result
+
+        dataset = result.get("dataset")
+        if not isinstance(dataset, dict):
+            return "No dataset found or invalid response format."
+
+        name = dataset.get("name", "Untitled")
+        description = dataset.get("description", "")
+        if isinstance(description, list):
+            description = " ".join(description)
+
+        doi = dataset.get("@id") or dataset.get("doi")
+        content = f"# {name}\n\n"
+        content += f"**id**: {result.get('id', 'Unknown')}\n"
+        if doi:
+            content += f"**doi**: {doi}\n"
+        links = [
+            _markdown_link("View dataset", result.get("viewUrl")),
+            _markdown_link("API record", result.get("url")),
+            _markdown_link("Previous version", result.get("previous")),
+            _markdown_link("Next version", result.get("next")),
+        ]
+        links = [link for link in links if link]
+        if links:
+            content += f"**links**: {' | '.join(links)}\n"
+        if result.get("dateUploaded"):
+            content += f"**dateUploaded**: {result.get('dateUploaded')}\n"
+        if result.get("dateModified"):
+            content += f"**dateModified**: {result.get('dateModified')}\n"
+        if "isPublic" in result:
+            content += f"**isPublic**: {result.get('isPublic')}\n"
+        if dataset.get("datePublished"):
+            content += f"**datePublished**: {dataset.get('datePublished')}\n"
+        if result.get("citation"):
+            content += f"**citation**: {result.get('citation')}\n"
+        content += "\n"
+
+        if format_type == "summary":
+            if description:
+                content += f"## Description\n{description}\n"
+            return content.rstrip()
+
+        if description:
+            content += f"## Description\n{description}\n\n"
+
+        creators = dataset.get("creator", [])
+        if not isinstance(creators, list):
+            creators = [creators]
+
+        if creators:
+            content += "## Creators\n"
+            for creator in creators:
+                given_name = creator.get("givenName", "")
+                family_name = creator.get("familyName", "")
+                creator_name = f"{given_name} {family_name}".strip()
+                affiliation = creator.get("affiliation", "")
+
+                content += f"- {creator_name}"
+                if affiliation:
+                    content += f" ({affiliation})"
+                content += "\n"
+            content += "\n"
+
+        keywords = dataset.get("keywords", [])
+        if not isinstance(keywords, list):
+            keywords = [keywords]
+
+        if keywords:
+            content += "## Keywords\n"
+            content += ", ".join(keywords)
+            content += "\n\n"
+
+        alternate_names = _as_string_list(dataset.get("alternateName"))
+        if alternate_names:
+            content += "## Alternate Names / Identifiers\n"
+            content += ", ".join(alternate_names)
+            content += "\n\n"
+
+        temporal_coverage = _summarize_temporal_coverage(
+            dataset.get("temporalCoverage")
+        )
+        if temporal_coverage:
+            content += "## Temporal Coverage\n"
+            content += f"{temporal_coverage}\n\n"
+
+        spatial_coverage = _summarize_spatial_coverage(
+            dataset.get("spatialCoverage")
+        )
+        if spatial_coverage:
+            content += "## Spatial Coverage\n"
+            for location in spatial_coverage:
+                content += f"- {location}\n"
+            content += "\n"
+
+        variables_measured = _as_string_list(dataset.get("variableMeasured"))
+        if variables_measured:
+            content += "## Variables Measured\n"
+            content += ", ".join(variables_measured)
+            content += "\n\n"
+
+        measurement_techniques = _as_string_list(
+            dataset.get("measurementTechnique")
+        )
+        if measurement_techniques:
+            content += "## Measurement Techniques\n"
+            for technique in measurement_techniques:
+                content += f"- {_truncate_text(technique, 500)}\n"
+            content += "\n"
+
+        funders = []
+        for funder in _as_list(dataset.get("funder")):
+            if isinstance(funder, dict):
+                funder_name = ", ".join(_organization_search_strings(funder))
+                if funder_name:
+                    funders.append(funder_name)
+            else:
+                funders.extend(_as_string_list(funder))
+        if funders:
+            content += "## Funders\n"
+            for funder in funders:
+                content += f"- {funder}\n"
+            content += "\n"
+
+        editor = dataset.get("editor")
+        if isinstance(editor, dict):
+            editor_details = _person_search_strings(editor)
+            if editor_details:
+                content += "## Contact\n"
+                content += f"- {', '.join(editor_details)}\n\n"
+
+        license_value = dataset.get("license")
+        if license_value:
+            content += "## License\n"
+            content += f"{license_value}\n\n"
+
+        providers = _summarize_provider(dataset.get("provider"))
+        if providers:
+            content += "## Provider\n"
+            for provider in providers:
+                content += f"- {provider}\n"
+            content += "\n"
+
+        awards = _as_string_list(dataset.get("award"))
+        if awards:
+            content += "## Award\n"
+            for award in awards:
+                content += f"- {award}\n"
+            content += "\n"
+
+        distribution = dataset.get("distribution", [])
+        if distribution:
+            content += "## Data Files\n"
+            for file in distribution:
+                file_name = file.get("name", "Unknown")
+                file_size = file.get("contentSize", 0)
+                file_format = file.get("encodingFormat", "Unknown")
+                file_url = file.get("contentUrl", "Unknown")
+                file_id = file.get("identifier", "Unknown")
+                content += (
+                    f"- {file_name} ({file_size} KB, {file_format}) "
+                    f"URL: {file_url} ID: {file_id}\n"
+                )
+
+        return content
 
     def format_dataset_versions(
         self, results: Dict[str, Any], format_type: str = "summary"
@@ -1368,19 +1920,16 @@ class ESSDiveClient:
 
         versions = results["result"]
         total = results.get("total", 0)
+        user_note = _format_result_user_note(results.get("user"))
         header = (
             f"Found {total} visible dataset versions. "
             f"Showing {len(versions)} results from newest to oldest:\n"
         )
-
-        pagination = (
-            "\nPagination:\n"
-            f"  previousCursor: {results.get('previousCursor') or 'None'}\n"
-            f"  nextCursor: {results.get('nextCursor') or 'None'}\n\n"
-        )
+        if user_note:
+            header += f"{user_note}\n"
 
         if format_type == "summary":
-            summary = header + pagination
+            summary = f"{header}\n"
 
             for i, version in enumerate(versions, 1):
                 dataset = version.get("dataset", {})
@@ -1389,16 +1938,26 @@ class ESSDiveClient:
                 summary += f"   ID: {version.get('id', 'Unknown')}\n"
                 if doi:
                     summary += f"   DOI: {doi}\n"
-                summary += f"   Uploaded: {version.get('dateUploaded', 'Unknown')}\n"
+                if _should_show_is_public(version.get("isPublic"), results.get("user")):
+                    summary += f"   isPublic: {version.get('isPublic')}\n"
+                summary += f"   dateUploaded: {version.get('dateUploaded', 'Unknown')}\n"
                 summary += f"   Published: {dataset.get('datePublished', 'Unknown')}\n"
-                summary += f"   URL: {version.get('viewUrl', 'Unknown')}\n"
+                links = [
+                    _markdown_link("View dataset", version.get("viewUrl")),
+                    _markdown_link("API record", version.get("url")),
+                    _markdown_link("Previous version", version.get("previous")),
+                    _markdown_link("Next version", version.get("next")),
+                ]
+                links = [link for link in links if link]
+                if links:
+                    summary += f"   Links: {' | '.join(links)}\n"
                 if i < len(versions):
                     summary += "\n"
 
             return summary
 
         if format_type == "detailed":
-            detailed = header + pagination
+            detailed = f"{header}\n"
 
             for i, version in enumerate(versions, 1):
                 dataset = version.get("dataset", {})
@@ -1407,12 +1966,20 @@ class ESSDiveClient:
                 detailed += f"   ID: {version.get('id', 'Unknown')}\n"
                 if doi:
                     detailed += f"   DOI: {doi}\n"
-                detailed += f"   Uploaded: {version.get('dateUploaded', 'Unknown')}\n"
-                detailed += f"   Modified: {version.get('dateModified', 'Unknown')}\n"
+                detailed += f"   dateUploaded: {version.get('dateUploaded', 'Unknown')}\n"
+                detailed += f"   dateModified: {version.get('dateModified', 'Unknown')}\n"
                 detailed += f"   Published: {dataset.get('datePublished', 'Unknown')}\n"
-                detailed += f"   Public: {version.get('isPublic', 'Unknown')}\n"
-                detailed += f"   View URL: {version.get('viewUrl', 'Unknown')}\n"
-                detailed += f"   API URL: {version.get('url', 'Unknown')}\n"
+                if _should_show_is_public(version.get("isPublic"), results.get("user")):
+                    detailed += f"   isPublic: {version.get('isPublic', 'Unknown')}\n"
+                links = [
+                    _markdown_link("View dataset", version.get("viewUrl")),
+                    _markdown_link("API record", version.get("url")),
+                    _markdown_link("Previous version", version.get("previous")),
+                    _markdown_link("Next version", version.get("next")),
+                ]
+                links = [link for link in links if link]
+                if links:
+                    detailed += f"   Links: {' | '.join(links)}\n"
 
                 description = dataset.get("description", "")
                 if isinstance(description, list):
@@ -1425,7 +1992,7 @@ class ESSDiveClient:
 
                 citation = version.get("citation")
                 if citation:
-                    detailed += f"   Citation: {citation}\n"
+                    detailed += f"   citation: {citation}\n"
 
                 if version.get("next"):
                     detailed += f"   Newer Version URL: {version['next']}\n"
@@ -1780,11 +2347,25 @@ def main():
         bool(api_token),
     )
 
-    # Create a FastMCP server
-    server = FastMCP("essdive_mcp")
-
     # Create a client for the ESS-DIVE API with the provided token
     client = ESSDiveClient(api_token=api_token)
+    pagination_store = PaginationStateStore()
+
+    @asynccontextmanager
+    async def server_lifespan(_: FastMCP):
+        cleanup_task = asyncio.create_task(
+            _run_pagination_state_cleanup(pagination_store)
+        )
+        try:
+            yield {}
+        finally:
+            cleanup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await cleanup_task
+            pagination_store.clear_all()
+
+    # Create a FastMCP server
+    server = FastMCP("essdive_mcp", lifespan=server_lifespan)
 
     # Register tool functions
     @server.tool(name="search-datasets", description="Search for datasets in ESS-DIVE")
@@ -1815,6 +2396,7 @@ def main():
         row_start: Optional[int] = None,
         page_size: Optional[int] = None,
         format: str = "summary",
+        ctx: Context = None,
     ) -> str:
         """
         Search for datasets in the ESS-DIVE repository.
@@ -1916,39 +2498,41 @@ def main():
             # use query as the text search string.
             text = query if query else None
 
-            # Search for datasets using the API's native query parameters first.
-            result = await client.search_datasets(
-                row_start=row_start,
-                page_size=page_size,
-                cursor=cursor,
-                is_public=_default_dataset_search_is_public(client.api_token),
-                creator=creator,
-                provider_name=provider_name,
-                text=text,
-                date_published=date_published,
-                begin_date=begin_date,
-                end_date=end_date,
-                keywords=keywords_list,
-                sort=sort,
-                bbox=bbox,
-                lat=lat,
-                lon=lon,
-                radius=radius,
+            search_kwargs = {
+                "row_start": row_start,
+                "page_size": page_size,
+                "cursor": cursor,
+                "is_public": _default_dataset_search_is_public(client.api_token),
+                "creator": creator,
+                "provider_name": provider_name,
+                "text": text,
+                "date_published": date_published,
+                "begin_date": begin_date,
+                "end_date": end_date,
+                "keywords": keywords_list,
+                "sort": sort,
+                "bbox": bbox,
+                "lat": lat,
+                "lon": lon,
+                "radius": radius,
+            }
+            result = await _execute_dataset_search_request(
+                client,
+                search_kwargs=search_kwargs,
+                local_filters=local_filters,
             )
-
-            # Apply extra metadata filters locally when the API does not support
-            # them as first-class /packages query params.
-            result = await _apply_local_dataset_filters(client, result, local_filters)
+            pagination_store.save_search(
+                session_id=ctx.session_id,
+                state_id=ctx.request_id,
+                search_kwargs=search_kwargs,
+                local_filters=local_filters,
+                format_type=format,
+                result=result,
+            )
 
             # Format the results
             formatted = client.format_results(result, format)
-
-            if format == "raw":
-                return json.dumps(formatted, indent=2)
-            elif isinstance(formatted, dict):
-                return json.dumps(formatted, indent=2)
-            else:
-                return str(formatted)
+            return _render_formatted_output(formatted, format)
 
         except Exception as exc:
             return _tool_error_response(
@@ -1987,150 +2571,163 @@ def main():
             )
 
     @server.tool(
+        name="next-search-page",
+        description="Show the next page of the most recent dataset search",
+    )
+    async def next_search_page(format: Optional[str] = None, ctx: Context = None) -> str:
+        """
+        Show the next page of the most recent dataset search.
+
+        This tool reuses the last dataset-search filters and paging context stored by
+        `search-datasets`, so callers do not need to manage pagination cursors directly.
+
+        Args:
+            format: Optional override for the output format (summary, detailed, raw)
+
+        Returns:
+            Formatted next page of dataset search results
+        """
+        LOGGER.debug("Tool next-search-page called format=%s", format)
+        try:
+            state_id, search_kwargs, local_filters, format_type = (
+                pagination_store.get_search_followup(
+                    ctx.session_id, "next", format_override=format
+                )
+            )
+            result = await _execute_dataset_search_request(
+                client,
+                search_kwargs=search_kwargs,
+                local_filters=local_filters,
+            )
+            pagination_store.save_search(
+                session_id=ctx.session_id,
+                state_id=state_id,
+                search_kwargs=search_kwargs,
+                local_filters=local_filters,
+                format_type=format_type,
+                result=result,
+            )
+            formatted = client.format_results(result, format_type)
+            return _render_formatted_output(formatted, format_type)
+        except Exception as exc:
+            return _tool_error_response(
+                "next-search-page",
+                exc,
+                verbose=verbose_mode,
+                context=_context_without_none({"format": format}),
+            )
+
+    @server.tool(
+        name="previous-search-page",
+        description="Show the previous page of the most recent dataset search",
+    )
+    async def previous_search_page(format: Optional[str] = None, ctx: Context = None) -> str:
+        """
+        Show the previous page of the most recent dataset search.
+
+        This tool reuses the last dataset-search filters and paging context stored by
+        `search-datasets`, so callers do not need to manage pagination cursors directly.
+
+        Args:
+            format: Optional override for the output format (summary, detailed, raw)
+
+        Returns:
+            Formatted previous page of dataset search results
+        """
+        LOGGER.debug("Tool previous-search-page called format=%s", format)
+        try:
+            state_id, search_kwargs, local_filters, format_type = (
+                pagination_store.get_search_followup(
+                    ctx.session_id, "previous", format_override=format)
+            )
+            result = await _execute_dataset_search_request(
+                client,
+                search_kwargs=search_kwargs,
+                local_filters=local_filters,
+            )
+            pagination_store.save_search(
+                session_id=ctx.session_id,
+                state_id=state_id,
+                search_kwargs=search_kwargs,
+                local_filters=local_filters,
+                format_type=format_type,
+                result=result,
+            )
+            formatted = client.format_results(result, format_type)
+            return _render_formatted_output(formatted, format_type)
+        except Exception as exc:
+            return _tool_error_response(
+                "previous-search-page",
+                exc,
+                verbose=verbose_mode,
+                context=_context_without_none({"format": format}),
+            )
+
+    @server.tool(
         name="get-dataset",
         description="Get detailed information about a specific dataset",
     )
-    async def get_dataset(id: str) -> str:
+    async def get_dataset(id: str, format: str = "detailed") -> str:
         """
         Get detailed information about a specific dataset.
 
         Args:
             id: ESS-DIVE dataset identifier
+            format: Format of the results (summary, detailed, raw)
 
         Examples:
             get-dataset with id="ess-dive-9ea5fe57db73c90-20241024T093714082510"
+            get-dataset with id="doi:10.15485/2529445" and format="raw"
 
         Returns:
             Formatted dataset information
         """
-        LOGGER.debug("Tool get-dataset called id=%s", id)
+        LOGGER.debug("Tool get-dataset called id=%s format=%s", id, format)
         try:
             result = await client.get_dataset(id)
-
-            # Format the result
-            dataset = result.get("dataset", {})
-            name = dataset.get("name", "Untitled")
-            description = dataset.get("description", "")
-            if isinstance(description, list):
-                description = " ".join(description)
-
-            # Format basic metadata
-            content = f"# {name}\n\n"
-            content += f"**ID**: {result.get('id', 'Unknown')}\n"
-            content += f"**Published**: {dataset.get('datePublished', 'Unknown')}\n\n"
-            content += f"## Description\n{description}\n\n"
-
-            # Format creators
-            creators = dataset.get("creator", [])
-            if not isinstance(creators, list):
-                creators = [creators]
-
-            if creators:
-                content += "## Creators\n"
-                for creator in creators:
-                    given_name = creator.get("givenName", "")
-                    family_name = creator.get("familyName", "")
-                    creator_name = f"{given_name} {family_name}".strip()
-                    affiliation = creator.get("affiliation", "")
-
-                    content += f"- {creator_name}"
-                    if affiliation:
-                        content += f" ({affiliation})"
-                    content += "\n"
-                content += "\n"
-
-            # Format keywords
-            keywords = dataset.get("keywords", [])
-            if not isinstance(keywords, list):
-                keywords = [keywords]
-
-            if keywords:
-                content += "## Keywords\n"
-                content += ", ".join(keywords)
-                content += "\n\n"
-
-            alternate_names = _as_string_list(dataset.get("alternateName"))
-            if alternate_names:
-                content += "## Alternate Names / Identifiers\n"
-                content += ", ".join(alternate_names)
-                content += "\n\n"
-
-            temporal_coverage = _summarize_temporal_coverage(
-                dataset.get("temporalCoverage")
-            )
-            if temporal_coverage:
-                content += "## Temporal Coverage\n"
-                content += f"{temporal_coverage}\n\n"
-
-            spatial_coverage = _summarize_spatial_coverage(
-                dataset.get("spatialCoverage")
-            )
-            if spatial_coverage:
-                content += "## Spatial Coverage\n"
-                for location in spatial_coverage:
-                    content += f"- {location}\n"
-                content += "\n"
-
-            variables_measured = _as_string_list(
-                dataset.get("variableMeasured"))
-            if variables_measured:
-                content += "## Variables Measured\n"
-                content += ", ".join(variables_measured)
-                content += "\n\n"
-
-            measurement_techniques = _as_string_list(
-                dataset.get("measurementTechnique")
-            )
-            if measurement_techniques:
-                content += "## Measurement Techniques\n"
-                for technique in measurement_techniques:
-                    content += f"- {_truncate_text(technique, 500)}\n"
-                content += "\n"
-
-            funders = []
-            for funder in _as_list(dataset.get("funder")):
-                if isinstance(funder, dict):
-                    funder_name = ", ".join(
-                        _organization_search_strings(funder))
-                    if funder_name:
-                        funders.append(funder_name)
-                else:
-                    funders.extend(_as_string_list(funder))
-            if funders:
-                content += "## Funders\n"
-                for funder in funders:
-                    content += f"- {funder}\n"
-                content += "\n"
-
-            editor = dataset.get("editor")
-            if isinstance(editor, dict):
-                editor_details = _person_search_strings(editor)
-                if editor_details:
-                    content += "## Contact\n"
-                    content += f"- {', '.join(editor_details)}\n\n"
-
-            license_value = dataset.get("license")
-            if license_value:
-                content += "## License\n"
-                content += f"{license_value}\n\n"
-
-            # Format data files if available
-            distribution = dataset.get("distribution", [])
-            if distribution:
-                content += "## Data Files\n"
-                for file in distribution:
-                    file_name = file.get("name", "Unknown")
-                    file_size = file.get("contentSize", 0)
-                    file_format = file.get("encodingFormat", "Unknown")
-                    file_url = file.get("contentUrl", "Unknown")
-                    file_id = file.get("identifier", "Unknown")
-                    content += f"- {file_name} ({file_size} KB, {file_format}) URL: {file_url} ID: {file_id}\n"
-
-            return content
+            formatted = client.format_dataset(result, format)
+            if format == "raw":
+                return json.dumps(formatted, indent=2)
+            if isinstance(formatted, dict):
+                return json.dumps(formatted, indent=2)
+            return str(formatted)
 
         except Exception as exc:
             return _tool_error_response(
                 "get-dataset",
+                exc,
+                verbose=verbose_mode,
+                context=_context_without_none({"id": id, "format": format}),
+            )
+
+    @server.tool(
+        name="get-dataset-status",
+        description="Get publication/workflow status information for a specific dataset",
+    )
+    async def get_dataset_status_tool(id: str) -> str:
+        """
+        Get workflow/status information for a dataset from the status endpoint.
+
+        Use this tool when the user explicitly asks for a dataset's status rather than
+        its general metadata. For multiple datasets, call the tool once per identifier.
+        This endpoint may require an ESS-DIVE API token and appropriate dataset access.
+
+        Args:
+            id: ESS-DIVE dataset identifier
+
+        Examples:
+            get-dataset-status with id="ess-dive-f78cb03d11550da-20260309T160313214"
+
+        Returns:
+            JSON string containing the dataset status response
+        """
+        LOGGER.debug("Tool get-dataset-status called id=%s", id)
+        try:
+            result = await client.get_dataset_status(id)
+            return json.dumps(result, indent=2)
+        except Exception as exc:
+            return _tool_error_response(
+                "get-dataset-status",
                 exc,
                 verbose=verbose_mode,
                 context={"id": id},
@@ -2145,6 +2742,7 @@ def main():
         page_size: Optional[int] = None,
         cursor: Optional[str] = None,
         format: str = "summary",
+        ctx: Context = None,
     ) -> str:
         """
         List visible versions for a dataset from newest to oldest.
@@ -2176,13 +2774,15 @@ def main():
                 page_size=page_size,
                 cursor=cursor,
             )
+            pagination_store.save_versions(
+                session_id=ctx.session_id,
+                state_id=ctx.request_id,
+                identifier=id,
+                format_type=format,
+                result=result,
+            )
             formatted = client.format_dataset_versions(result, format)
-
-            if format == "raw":
-                return json.dumps(formatted, indent=2)
-            if isinstance(formatted, dict):
-                return json.dumps(formatted, indent=2)
-            return str(formatted)
+            return _render_formatted_output(formatted, format)
 
         except Exception as exc:
             return _tool_error_response(
@@ -2197,6 +2797,96 @@ def main():
                         "format": format,
                     }
                 ),
+            )
+
+    @server.tool(
+        name="next-dataset-versions-page",
+        description="Show the next page of the most recent dataset-version history request",
+    )
+    async def next_dataset_versions_page(format: Optional[str] = None, ctx: Context = None) -> str:
+        """
+        Show the next page of the most recent dataset-version history request.
+
+        This tool reuses the last version-history paging context stored by
+        `get-dataset-versions`, so callers do not need to manage pagination cursors
+        directly.
+
+        Args:
+            format: Optional override for the output format (summary, detailed, raw)
+
+        Returns:
+            Formatted next page of dataset version history
+        """
+        LOGGER.debug("Tool next-dataset-versions-page called format=%s", format)
+        try:
+            state_id, identifier, cursor_value, format_type = (
+                pagination_store.get_versions_followup(
+                    ctx.session_id, "next", format_override=format)
+            )
+            result = await client.get_dataset_versions(
+                identifier,
+                cursor=cursor_value,
+            )
+            pagination_store.save_versions(
+                session_id=ctx.session_id,
+                state_id=state_id,
+                identifier=identifier,
+                format_type=format_type,
+                result=result,
+            )
+            formatted = client.format_dataset_versions(result, format_type)
+            return _render_formatted_output(formatted, format_type)
+        except Exception as exc:
+            return _tool_error_response(
+                "next-dataset-versions-page",
+                exc,
+                verbose=verbose_mode,
+                context=_context_without_none({"format": format}),
+            )
+
+    @server.tool(
+        name="previous-dataset-versions-page",
+        description="Show the previous page of the most recent dataset-version history request",
+    )
+    async def previous_dataset_versions_page(format: Optional[str] = None, ctx: Context = None) -> str:
+        """
+        Show the previous page of the most recent dataset-version history request.
+
+        This tool reuses the last version-history paging context stored by
+        `get-dataset-versions`, so callers do not need to manage pagination cursors
+        directly.
+
+        Args:
+            format: Optional override for the output format (summary, detailed, raw)
+
+        Returns:
+            Formatted previous page of dataset version history
+        """
+        LOGGER.debug("Tool previous-dataset-versions-page called format=%s", format)
+        try:
+            state_id, identifier, cursor_value, format_type = (
+                pagination_store.get_versions_followup(
+                    ctx.session_id, "previous", format_override=format)
+            )
+            result = await client.get_dataset_versions(
+                identifier,
+                cursor=cursor_value,
+            )
+            pagination_store.save_versions(
+                session_id=ctx.session_id,
+                state_id=state_id,
+                identifier=identifier,
+                format_type=format_type,
+                result=result,
+            )
+            formatted = client.format_dataset_versions(result, format_type)
+            return _render_formatted_output(formatted, format_type)
+        except Exception as exc:
+            return _tool_error_response(
+                "previous-dataset-versions-page",
+                exc,
+                verbose=verbose_mode,
+                context=_context_without_none({"format": format}),
             )
 
     @server.tool(

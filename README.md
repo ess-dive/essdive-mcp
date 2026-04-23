@@ -374,6 +374,12 @@ If your preferred client is not listed here, look for that client's MCP server s
 uv run essdive-mcp
 ```
 
+For hosted or container deployments, the same server can run over streamable HTTP instead:
+
+```bash
+uv run essdive-mcp --transport streamable-http --host 0.0.0.0 --port 8000 --path /mcp
+```
+
 Client Options:
 - VS Code with GitHub Copilot Chat
 - Claude Code
@@ -466,8 +472,6 @@ command = "uv"
 args = ["run", "essdive-mcp"]
 ```
 
-If you need authenticated/private-data access, add `ESSDIVE_API_TOKEN` to your Codex MCP server environment or pass `--token-file`.
-
 Then confirm it:
 
 ```bash
@@ -475,6 +479,12 @@ codex mcp get essdive-mcp
 ```
 
 In the Codex TUI, use `/mcp` to inspect active MCP servers.
+
+If you need authenticated/private-data access, add `ESSDIVE_API_TOKEN` to your Codex MCP server environment or pass `--token-file`.
+
+## Hosted Deployment
+
+If you want to run `essdive-mcp` as a hosted MCP server over streamable HTTP, including Docker-based deployment, see [docs/HOSTED_HTTP_SETUP.md](docs/HOSTED_HTTP_SETUP.md).
 
 ### Goose
 

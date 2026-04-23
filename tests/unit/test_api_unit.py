@@ -21,6 +21,8 @@ from essdive_mcp.main import (
     _apply_local_dataset_filters,
     _default_dataset_search_is_public,
     _resolve_startup_api_token,
+    _build_arg_parser,
+    _resolve_runtime_config,
     PaginationStateStore,
 )
 import pytest
@@ -95,6 +97,97 @@ class TestDatasetSearchVisibilityDefaults:
     def test_authenticated_search_allows_private_matches(self):
         """Authenticated search should not force the API back to public-only."""
         assert _default_dataset_search_is_public("token-123") is None
+
+
+class TestServerRuntimeConfig:
+    """Tests for CLI/env transport resolution."""
+
+    def test_stdio_is_default_transport(self):
+        """Without overrides, the server should stay on stdio for local usage."""
+        parser = _build_arg_parser()
+        args = parser.parse_args([])
+
+        config = _resolve_runtime_config(args)
+
+        assert config.transport == "stdio"
+        assert config.host is None
+        assert config.port is None
+        assert config.path is None
+        assert config.json_response is False
+        assert config.stateless_http is False
+
+    def test_streamable_http_uses_defaults(self):
+        """Hosted transport should resolve sensible default bind settings."""
+        parser = _build_arg_parser()
+        args = parser.parse_args(["--transport", "streamable-http"])
+
+        config = _resolve_runtime_config(args)
+
+        assert config.transport == "streamable-http"
+        assert config.host == "127.0.0.1"
+        assert config.port == 8000
+        assert config.path == "/mcp"
+        assert config.json_response is False
+        assert config.stateless_http is False
+
+    def test_runtime_config_uses_environment_overrides(self):
+        """Environment variables should configure hosted transport for containers."""
+        parser = _build_arg_parser()
+        args = parser.parse_args([])
+
+        with patch.dict(
+            os.environ,
+            {
+                "ESSDIVE_MCP_TRANSPORT": "streamable-http",
+                "ESSDIVE_MCP_HOST": "0.0.0.0",
+                "ESSDIVE_MCP_PORT": "9000",
+                "ESSDIVE_MCP_PATH": "/hosted-mcp",
+                "ESSDIVE_MCP_JSON_RESPONSE": "true",
+                "ESSDIVE_MCP_STATELESS_HTTP": "1",
+            },
+            clear=False,
+        ):
+            config = _resolve_runtime_config(args)
+
+        assert config.transport == "streamable-http"
+        assert config.host == "0.0.0.0"
+        assert config.port == 9000
+        assert config.path == "/hosted-mcp"
+        assert config.json_response is True
+        assert config.stateless_http is True
+
+    def test_runtime_config_prefers_cli_over_environment(self):
+        """CLI options should override container environment defaults."""
+        parser = _build_arg_parser()
+        args = parser.parse_args(
+            [
+                "--transport",
+                "http",
+                "--host",
+                "127.0.0.2",
+                "--port",
+                "8123",
+                "--path",
+                "/custom",
+            ]
+        )
+
+        with patch.dict(
+            os.environ,
+            {
+                "ESSDIVE_MCP_TRANSPORT": "stdio",
+                "ESSDIVE_MCP_HOST": "0.0.0.0",
+                "ESSDIVE_MCP_PORT": "9000",
+                "ESSDIVE_MCP_PATH": "/ignored",
+            },
+            clear=False,
+        ):
+            config = _resolve_runtime_config(args)
+
+        assert config.transport == "streamable-http"
+        assert config.host == "127.0.0.2"
+        assert config.port == 8123
+        assert config.path == "/custom"
 
 
 class TestPaginationStateStore:

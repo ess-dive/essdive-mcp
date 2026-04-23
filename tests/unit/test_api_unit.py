@@ -105,6 +105,7 @@ class TestPaginationStateStore:
         store = PaginationStateStore()
 
         store.save_search(
+            session_id="session-a",
             search_kwargs={
                 "text": "soil carbon",
                 "sort": "name:asc",
@@ -117,7 +118,8 @@ class TestPaginationStateStore:
             result={"nextCursor": "next-cursor-123", "previousCursor": None},
         )
 
-        search_kwargs, local_filters, format_type = store.get_search_followup("next")
+        search_kwargs, local_filters, format_type = store.get_search_followup(
+            "session-a", "next")
 
         assert search_kwargs == {
             "text": "soil carbon",
@@ -133,13 +135,15 @@ class TestPaginationStateStore:
         """Follow-up search tools may override the stored output format."""
         store = PaginationStateStore()
         store.save_search(
+            session_id="session-a",
             search_kwargs={"text": "soil carbon"},
             local_filters={},
             format_type="summary",
             result={"nextCursor": "next-cursor-123", "previousCursor": None},
         )
 
-        _, _, format_type = store.get_search_followup("next", format_override="raw")
+        _, _, format_type = store.get_search_followup(
+            "session-a", "next", format_override="raw")
 
         assert format_type == "raw"
 
@@ -148,12 +152,13 @@ class TestPaginationStateStore:
         store = PaginationStateStore()
 
         with pytest.raises(ValueError, match="No prior dataset search"):
-            store.get_search_followup("next")
+            store.get_search_followup("session-a", "next")
 
     def test_search_followup_requires_requested_direction_cursor(self):
         """Paging should fail cleanly when no next/previous cursor exists."""
         store = PaginationStateStore()
         store.save_search(
+            session_id="session-a",
             search_kwargs={"text": "soil carbon"},
             local_filters={},
             format_type="summary",
@@ -161,18 +166,46 @@ class TestPaginationStateStore:
         )
 
         with pytest.raises(ValueError, match="No next page is available"):
-            store.get_search_followup("next")
+            store.get_search_followup("session-a", "next")
+
+    def test_search_followup_is_scoped_per_session(self):
+        """Pagination state should not leak across sessions."""
+        store = PaginationStateStore()
+        store.save_search(
+            session_id="session-a",
+            search_kwargs={"text": "soil carbon"},
+            local_filters={},
+            format_type="summary",
+            result={"nextCursor": "next-a", "previousCursor": None},
+        )
+        store.save_search(
+            session_id="session-b",
+            search_kwargs={"text": "wildfire"},
+            local_filters={},
+            format_type="detailed",
+            result={"nextCursor": "next-b", "previousCursor": None},
+        )
+
+        kwargs_a, _, format_a = store.get_search_followup("session-a", "next")
+        kwargs_b, _, format_b = store.get_search_followup("session-b", "next")
+
+        assert kwargs_a["cursor"] == "next-a"
+        assert kwargs_b["cursor"] == "next-b"
+        assert format_a == "summary"
+        assert format_b == "detailed"
 
     def test_versions_followup_reuses_identifier_and_cursor(self):
         """Next/previous version-page tools should reuse the last versions request."""
         store = PaginationStateStore()
         store.save_versions(
+            session_id="session-a",
             identifier="doi:10.1234/example",
             format_type="detailed",
             result={"nextCursor": "next-version-cursor", "previousCursor": None},
         )
 
-        identifier, cursor, format_type = store.get_versions_followup("next")
+        identifier, cursor, format_type = store.get_versions_followup(
+            "session-a", "next")
 
         assert identifier == "doi:10.1234/example"
         assert cursor == "next-version-cursor"
@@ -183,7 +216,35 @@ class TestPaginationStateStore:
         store = PaginationStateStore()
 
         with pytest.raises(ValueError, match="No prior dataset-version request"):
-            store.get_versions_followup("next")
+            store.get_versions_followup("session-a", "next")
+
+    def test_versions_followup_is_scoped_per_session(self):
+        """Version pagination state should not leak across sessions."""
+        store = PaginationStateStore()
+        store.save_versions(
+            session_id="session-a",
+            identifier="doi:10.1234/example-a",
+            format_type="summary",
+            result={"nextCursor": "next-a", "previousCursor": None},
+        )
+        store.save_versions(
+            session_id="session-b",
+            identifier="doi:10.1234/example-b",
+            format_type="raw",
+            result={"nextCursor": "next-b", "previousCursor": None},
+        )
+
+        identifier_a, cursor_a, format_a = store.get_versions_followup(
+            "session-a", "next")
+        identifier_b, cursor_b, format_b = store.get_versions_followup(
+            "session-b", "next")
+
+        assert identifier_a == "doi:10.1234/example-a"
+        assert cursor_a == "next-a"
+        assert format_a == "summary"
+        assert identifier_b == "doi:10.1234/example-b"
+        assert cursor_b == "next-b"
+        assert format_b == "raw"
 
 
 class TestToolErrorPayload:

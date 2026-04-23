@@ -74,6 +74,7 @@ from urllib.parse import quote
 from urllib.parse import quote as url_quote
 
 from fastmcp import FastMCP
+from fastmcp.server.context import Context
 
 
 LOGGER = logging.getLogger("essdive_mcp")
@@ -470,15 +471,16 @@ class VersionsPaginationState:
 
 
 class PaginationStateStore:
-    """Track the most recent dataset-search and version-history context."""
+    """Track per-session dataset-search and version-history context."""
 
     def __init__(self) -> None:
-        self.search: Optional[SearchPaginationState] = None
-        self.versions: Optional[VersionsPaginationState] = None
+        self.search_by_session: Dict[str, SearchPaginationState] = {}
+        self.versions_by_session: Dict[str, VersionsPaginationState] = {}
 
     def save_search(
         self,
         *,
+        session_id: str,
         search_kwargs: Dict[str, Any],
         local_filters: Dict[str, List[str]],
         format_type: str,
@@ -488,7 +490,7 @@ class PaginationStateStore:
         base_kwargs["cursor"] = None
         base_kwargs["row_start"] = None
 
-        self.search = SearchPaginationState(
+        self.search_by_session[session_id] = SearchPaginationState(
             search_kwargs=base_kwargs,
             local_filters={key: list(values) for key, values in local_filters.items()},
             format_type=format_type,
@@ -498,41 +500,44 @@ class PaginationStateStore:
 
     def get_search_followup(
         self,
+        session_id: str,
         direction: str,
         *,
         format_override: Optional[str] = None,
     ) -> tuple[Dict[str, Any], Dict[str, List[str]], str]:
-        if not self.search:
+        search_state = self.search_by_session.get(session_id)
+        if not search_state:
             raise ValueError("No prior dataset search is available for pagination.")
 
         cursor = (
-            self.search.next_cursor
+            search_state.next_cursor
             if direction == "next"
-            else self.search.previous_cursor
+            else search_state.previous_cursor
         )
         if not cursor:
             raise ValueError(
                 f"No {direction} page is available for the most recent dataset search."
             )
 
-        followup_kwargs = dict(self.search.search_kwargs)
+        followup_kwargs = dict(search_state.search_kwargs)
         followup_kwargs["cursor"] = cursor
         followup_kwargs["row_start"] = None
         followup_kwargs["page_size"] = None
         return (
             followup_kwargs,
-            {key: list(values) for key, values in self.search.local_filters.items()},
-            format_override or self.search.format_type,
+            {key: list(values) for key, values in search_state.local_filters.items()},
+            format_override or search_state.format_type,
         )
 
     def save_versions(
         self,
         *,
+        session_id: str,
         identifier: str,
         format_type: str,
         result: Dict[str, Any],
     ) -> None:
-        self.versions = VersionsPaginationState(
+        self.versions_by_session[session_id] = VersionsPaginationState(
             identifier=identifier,
             format_type=format_type,
             next_cursor=result.get("nextCursor"),
@@ -541,19 +546,21 @@ class PaginationStateStore:
 
     def get_versions_followup(
         self,
+        session_id: str,
         direction: str,
         *,
         format_override: Optional[str] = None,
     ) -> tuple[str, str, str]:
-        if not self.versions:
+        versions_state = self.versions_by_session.get(session_id)
+        if not versions_state:
             raise ValueError(
                 "No prior dataset-version request is available for pagination."
             )
 
         cursor = (
-            self.versions.next_cursor
+            versions_state.next_cursor
             if direction == "next"
-            else self.versions.previous_cursor
+            else versions_state.previous_cursor
         )
         if not cursor:
             raise ValueError(
@@ -561,9 +568,9 @@ class PaginationStateStore:
             )
 
         return (
-            self.versions.identifier,
+            versions_state.identifier,
             cursor,
-            format_override or self.versions.format_type,
+            format_override or versions_state.format_type,
         )
 
 
@@ -2263,6 +2270,7 @@ def main():
         row_start: Optional[int] = None,
         page_size: Optional[int] = None,
         format: str = "summary",
+        ctx: Context = None,
     ) -> str:
         """
         Search for datasets in the ESS-DIVE repository.
@@ -2388,6 +2396,7 @@ def main():
                 local_filters=local_filters,
             )
             pagination_store.save_search(
+                session_id=ctx.session_id,
                 search_kwargs=search_kwargs,
                 local_filters=local_filters,
                 format_type=format,
@@ -2438,7 +2447,7 @@ def main():
         name="next-search-page",
         description="Show the next page of the most recent dataset search",
     )
-    async def next_search_page(format: Optional[str] = None) -> str:
+    async def next_search_page(format: Optional[str] = None, ctx: Context = None) -> str:
         """
         Show the next page of the most recent dataset search.
 
@@ -2454,7 +2463,9 @@ def main():
         LOGGER.debug("Tool next-search-page called format=%s", format)
         try:
             search_kwargs, local_filters, format_type = (
-                pagination_store.get_search_followup("next", format_override=format)
+                pagination_store.get_search_followup(
+                    ctx.session_id, "next", format_override=format
+                )
             )
             result = await _execute_dataset_search_request(
                 client,
@@ -2462,6 +2473,7 @@ def main():
                 local_filters=local_filters,
             )
             pagination_store.save_search(
+                session_id=ctx.session_id,
                 search_kwargs=search_kwargs,
                 local_filters=local_filters,
                 format_type=format_type,
@@ -2481,7 +2493,7 @@ def main():
         name="previous-search-page",
         description="Show the previous page of the most recent dataset search",
     )
-    async def previous_search_page(format: Optional[str] = None) -> str:
+    async def previous_search_page(format: Optional[str] = None, ctx: Context = None) -> str:
         """
         Show the previous page of the most recent dataset search.
 
@@ -2498,7 +2510,7 @@ def main():
         try:
             search_kwargs, local_filters, format_type = (
                 pagination_store.get_search_followup(
-                    "previous", format_override=format)
+                    ctx.session_id, "previous", format_override=format)
             )
             result = await _execute_dataset_search_request(
                 client,
@@ -2506,6 +2518,7 @@ def main():
                 local_filters=local_filters,
             )
             pagination_store.save_search(
+                session_id=ctx.session_id,
                 search_kwargs=search_kwargs,
                 local_filters=local_filters,
                 format_type=format_type,
@@ -2600,6 +2613,7 @@ def main():
         page_size: Optional[int] = None,
         cursor: Optional[str] = None,
         format: str = "summary",
+        ctx: Context = None,
     ) -> str:
         """
         List visible versions for a dataset from newest to oldest.
@@ -2632,6 +2646,7 @@ def main():
                 cursor=cursor,
             )
             pagination_store.save_versions(
+                session_id=ctx.session_id,
                 identifier=id,
                 format_type=format,
                 result=result,
@@ -2658,7 +2673,7 @@ def main():
         name="next-dataset-versions-page",
         description="Show the next page of the most recent dataset-version history request",
     )
-    async def next_dataset_versions_page(format: Optional[str] = None) -> str:
+    async def next_dataset_versions_page(format: Optional[str] = None, ctx: Context = None) -> str:
         """
         Show the next page of the most recent dataset-version history request.
 
@@ -2676,13 +2691,14 @@ def main():
         try:
             identifier, cursor_value, format_type = (
                 pagination_store.get_versions_followup(
-                    "next", format_override=format)
+                    ctx.session_id, "next", format_override=format)
             )
             result = await client.get_dataset_versions(
                 identifier,
                 cursor=cursor_value,
             )
             pagination_store.save_versions(
+                session_id=ctx.session_id,
                 identifier=identifier,
                 format_type=format_type,
                 result=result,
@@ -2701,7 +2717,7 @@ def main():
         name="previous-dataset-versions-page",
         description="Show the previous page of the most recent dataset-version history request",
     )
-    async def previous_dataset_versions_page(format: Optional[str] = None) -> str:
+    async def previous_dataset_versions_page(format: Optional[str] = None, ctx: Context = None) -> str:
         """
         Show the previous page of the most recent dataset-version history request.
 
@@ -2719,13 +2735,14 @@ def main():
         try:
             identifier, cursor_value, format_type = (
                 pagination_store.get_versions_followup(
-                    "previous", format_override=format)
+                    ctx.session_id, "previous", format_override=format)
             )
             result = await client.get_dataset_versions(
                 identifier,
                 cursor=cursor_value,
             )
             pagination_store.save_versions(
+                session_id=ctx.session_id,
                 identifier=identifier,
                 format_type=format_type,
                 result=result,

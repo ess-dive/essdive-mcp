@@ -47,8 +47,12 @@ claude mcp add --transport stdio essdive-mcp -- uv run python ./src/essdive_mcp/
 # Tools
 
 - `search-datasets`
+- `next-search-page`
+- `previous-search-page`
 - `get-dataset`
 - `get-dataset-versions`
+- `next-dataset-versions-page`
+- `previous-dataset-versions-page`
 - `get-dataset-status`
 - `get-dataset-permissions`
 - `parse-flmd-file`
@@ -95,6 +99,30 @@ Then use the returned `nextCursor` or `previousCursor`:
 
 ```
 search-datasets with query="BIONTE" and sort="name:asc" and cursor="PASTE_NEXT_OR_PREVIOUS_CURSOR_HERE"
+```
+
+For conversational pagination, prefer the stateful MCP wrapper instead of exposing cursors:
+
+```
+next-search-page
+```
+
+Or go back:
+
+```
+previous-search-page
+```
+
+If you need direct access to the raw pagination metadata, request raw form:
+
+```
+search-datasets with query="BIONTE" and sort="name:asc" and page_size=2 and format="raw"
+```
+
+Then summarize the page yourself, and if the user asks for the next page, rerun the same search with the returned `nextCursor` unchanged:
+
+```
+search-datasets with query="BIONTE" and sort="name:asc" and cursor="PASTE_NEXT_CURSOR_HERE" and format="raw"
 ```
 
 Filter by bounding box:
@@ -181,6 +209,22 @@ Follow a version-history cursor:
 get-dataset-versions with id="doi:10.15485/2529445" and cursor="PASTE_NEXT_OR_PREVIOUS_CURSOR_HERE"
 ```
 
+For conversational pagination through version history, prefer the stateful MCP wrappers:
+
+```
+next-dataset-versions-page
+```
+
+```
+previous-dataset-versions-page
+```
+
+If you need direct access to the raw pagination metadata, prefer raw mode on the first call:
+
+```
+get-dataset-versions with id="doi:10.15485/2529445" and page_size=2 and format="raw"
+```
+
 Check sharing permissions (requires token):
 
 ```
@@ -215,9 +259,12 @@ coords-to-map-links with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
 - `page_size` max is 100.
 - `cursor` is the preferred way to page through search results. `row_start` is still supported for compatibility but is legacy.
 - Search and version responses include an integer `total` plus `nextCursor` and `previousCursor` when pagination is available.
+- `next-search-page` and `previous-search-page` page through the most recent `search-datasets` request without requiring the caller to pass cursors.
 - For cursor follow-up searches, omit `cursor` on the first request, then pass the returned `nextCursor` or `previousCursor` value unchanged on later requests. Reuse the same search filters and omit `page_size` unless you know it matches the cursor's encoded page size.
+- For a conversational “show me the next page” flow, prefer the stateful next/previous page tools. Use raw mode only when you explicitly need to inspect or persist the API cursor values.
 - `sort` accepts comma-separated `field:direction` clauses. Supported fields: `name`, `dateUploaded`, `authorLastName`. Supported directions: `asc`, `desc`.
 - `get-dataset-versions` lists visible versions from newest to oldest and supports cursor pagination.
+- `next-dataset-versions-page` and `previous-dataset-versions-page` page through the most recent `get-dataset-versions` request without requiring the caller to pass cursors.
 - For `get-dataset-versions`, omit `page_size` on cursor follow-up calls unless you know it matches the cursor's encoded page size. As with search, pass returned cursor values unchanged.
 - `bbox` uses `[min_lat, min_lon, max_lat, max_lon]` ordering and can also be passed as a comma-delimited string.
 - Point search requires `lat`, `lon`, and `radius` together. Do not combine point search with `bbox`.

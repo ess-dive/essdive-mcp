@@ -12,11 +12,15 @@ MCP Tools Available:
     provider, publication date, temporal coverage, keywords, geographic bounds/nearby
     search, and local metadata-aware post-filters for fields exposed on full dataset
     records. Supports pagination and multiple result formats.
+  - next-search-page / previous-search-page: Navigate the most recent dataset-search
+    result set without exposing raw pagination cursors.
   - get-dataset: Retrieve detailed metadata for a specific dataset, including top-level
     package fields such as isPublic, dateUploaded, dateModified, citation, and
     available data files.
   - get-dataset-versions: List visible versions of a dataset from newest to oldest,
     with cursor-based pagination support for version history navigation.
+  - next-dataset-versions-page / previous-dataset-versions-page: Navigate the most
+    recent dataset-version history request without exposing raw pagination cursors.
   - get-dataset-status: Get workflow/status metadata for a dataset from the
     /packages/{identifier}/status endpoint.
   - get-dataset-permissions: Get sharing and access permission information for datasets.
@@ -58,6 +62,7 @@ import csv
 import re
 import logging
 import traceback
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 import requests
@@ -441,6 +446,148 @@ def _markdown_link(label: str, url: Optional[str]) -> Optional[str]:
     if not url:
         return None
     return f"[{label}]({url})"
+
+
+@dataclass
+class SearchPaginationState:
+    """State needed to continue paging through a dataset search."""
+
+    search_kwargs: Dict[str, Any]
+    local_filters: Dict[str, List[str]]
+    format_type: str
+    next_cursor: Optional[str]
+    previous_cursor: Optional[str]
+
+
+@dataclass
+class VersionsPaginationState:
+    """State needed to continue paging through dataset versions."""
+
+    identifier: str
+    format_type: str
+    next_cursor: Optional[str]
+    previous_cursor: Optional[str]
+
+
+class PaginationStateStore:
+    """Track the most recent dataset-search and version-history context."""
+
+    def __init__(self) -> None:
+        self.search: Optional[SearchPaginationState] = None
+        self.versions: Optional[VersionsPaginationState] = None
+
+    def save_search(
+        self,
+        *,
+        search_kwargs: Dict[str, Any],
+        local_filters: Dict[str, List[str]],
+        format_type: str,
+        result: Dict[str, Any],
+    ) -> None:
+        base_kwargs = dict(search_kwargs)
+        base_kwargs["cursor"] = None
+        base_kwargs["row_start"] = None
+
+        self.search = SearchPaginationState(
+            search_kwargs=base_kwargs,
+            local_filters={key: list(values) for key, values in local_filters.items()},
+            format_type=format_type,
+            next_cursor=result.get("nextCursor"),
+            previous_cursor=result.get("previousCursor"),
+        )
+
+    def get_search_followup(
+        self,
+        direction: str,
+        *,
+        format_override: Optional[str] = None,
+    ) -> tuple[Dict[str, Any], Dict[str, List[str]], str]:
+        if not self.search:
+            raise ValueError("No prior dataset search is available for pagination.")
+
+        cursor = (
+            self.search.next_cursor
+            if direction == "next"
+            else self.search.previous_cursor
+        )
+        if not cursor:
+            raise ValueError(
+                f"No {direction} page is available for the most recent dataset search."
+            )
+
+        followup_kwargs = dict(self.search.search_kwargs)
+        followup_kwargs["cursor"] = cursor
+        followup_kwargs["row_start"] = None
+        followup_kwargs["page_size"] = None
+        return (
+            followup_kwargs,
+            {key: list(values) for key, values in self.search.local_filters.items()},
+            format_override or self.search.format_type,
+        )
+
+    def save_versions(
+        self,
+        *,
+        identifier: str,
+        format_type: str,
+        result: Dict[str, Any],
+    ) -> None:
+        self.versions = VersionsPaginationState(
+            identifier=identifier,
+            format_type=format_type,
+            next_cursor=result.get("nextCursor"),
+            previous_cursor=result.get("previousCursor"),
+        )
+
+    def get_versions_followup(
+        self,
+        direction: str,
+        *,
+        format_override: Optional[str] = None,
+    ) -> tuple[str, str, str]:
+        if not self.versions:
+            raise ValueError(
+                "No prior dataset-version request is available for pagination."
+            )
+
+        cursor = (
+            self.versions.next_cursor
+            if direction == "next"
+            else self.versions.previous_cursor
+        )
+        if not cursor:
+            raise ValueError(
+                f"No {direction} page is available for the most recent dataset-version request."
+            )
+
+        return (
+            self.versions.identifier,
+            cursor,
+            format_override or self.versions.format_type,
+        )
+
+
+async def _execute_dataset_search_request(
+    client: "ESSDiveClient",
+    *,
+    search_kwargs: Dict[str, Any],
+    local_filters: Dict[str, List[str]],
+) -> Dict[str, Any]:
+    """Run an ESS-DIVE search and apply any local metadata filters."""
+    result = await client.search_datasets(**search_kwargs)
+    return await _apply_local_dataset_filters(client, result, local_filters)
+
+
+def _render_formatted_output(
+    formatted: Union[str, Dict[str, Any]],
+    format_type: str,
+) -> str:
+    """Serialize formatted MCP tool output."""
+    if format_type == "raw":
+        return json.dumps(formatted, indent=2)
+    if isinstance(formatted, dict):
+        return json.dumps(formatted, indent=2)
+    return str(formatted)
 
 
 def _distribution_search_strings(
@@ -2085,6 +2232,7 @@ def main():
 
     # Create a client for the ESS-DIVE API with the provided token
     client = ESSDiveClient(api_token=api_token)
+    pagination_store = PaginationStateStore()
 
     # Register tool functions
     @server.tool(name="search-datasets", description="Search for datasets in ESS-DIVE")
@@ -2216,39 +2364,39 @@ def main():
             # use query as the text search string.
             text = query if query else None
 
-            # Search for datasets using the API's native query parameters first.
-            result = await client.search_datasets(
-                row_start=row_start,
-                page_size=page_size,
-                cursor=cursor,
-                is_public=_default_dataset_search_is_public(client.api_token),
-                creator=creator,
-                provider_name=provider_name,
-                text=text,
-                date_published=date_published,
-                begin_date=begin_date,
-                end_date=end_date,
-                keywords=keywords_list,
-                sort=sort,
-                bbox=bbox,
-                lat=lat,
-                lon=lon,
-                radius=radius,
+            search_kwargs = {
+                "row_start": row_start,
+                "page_size": page_size,
+                "cursor": cursor,
+                "is_public": _default_dataset_search_is_public(client.api_token),
+                "creator": creator,
+                "provider_name": provider_name,
+                "text": text,
+                "date_published": date_published,
+                "begin_date": begin_date,
+                "end_date": end_date,
+                "keywords": keywords_list,
+                "sort": sort,
+                "bbox": bbox,
+                "lat": lat,
+                "lon": lon,
+                "radius": radius,
+            }
+            result = await _execute_dataset_search_request(
+                client,
+                search_kwargs=search_kwargs,
+                local_filters=local_filters,
             )
-
-            # Apply extra metadata filters locally when the API does not support
-            # them as first-class /packages query params.
-            result = await _apply_local_dataset_filters(client, result, local_filters)
+            pagination_store.save_search(
+                search_kwargs=search_kwargs,
+                local_filters=local_filters,
+                format_type=format,
+                result=result,
+            )
 
             # Format the results
             formatted = client.format_results(result, format)
-
-            if format == "raw":
-                return json.dumps(formatted, indent=2)
-            elif isinstance(formatted, dict):
-                return json.dumps(formatted, indent=2)
-            else:
-                return str(formatted)
+            return _render_formatted_output(formatted, format)
 
         except Exception as exc:
             return _tool_error_response(
@@ -2284,6 +2432,93 @@ def main():
                         "format": format,
                     }
                 ),
+            )
+
+    @server.tool(
+        name="next-search-page",
+        description="Show the next page of the most recent dataset search",
+    )
+    async def next_search_page(format: Optional[str] = None) -> str:
+        """
+        Show the next page of the most recent dataset search.
+
+        This tool reuses the last dataset-search filters and paging context stored by
+        `search-datasets`, so callers do not need to manage pagination cursors directly.
+
+        Args:
+            format: Optional override for the output format (summary, detailed, raw)
+
+        Returns:
+            Formatted next page of dataset search results
+        """
+        LOGGER.debug("Tool next-search-page called format=%s", format)
+        try:
+            search_kwargs, local_filters, format_type = (
+                pagination_store.get_search_followup("next", format_override=format)
+            )
+            result = await _execute_dataset_search_request(
+                client,
+                search_kwargs=search_kwargs,
+                local_filters=local_filters,
+            )
+            pagination_store.save_search(
+                search_kwargs=search_kwargs,
+                local_filters=local_filters,
+                format_type=format_type,
+                result=result,
+            )
+            formatted = client.format_results(result, format_type)
+            return _render_formatted_output(formatted, format_type)
+        except Exception as exc:
+            return _tool_error_response(
+                "next-search-page",
+                exc,
+                verbose=verbose_mode,
+                context=_context_without_none({"format": format}),
+            )
+
+    @server.tool(
+        name="previous-search-page",
+        description="Show the previous page of the most recent dataset search",
+    )
+    async def previous_search_page(format: Optional[str] = None) -> str:
+        """
+        Show the previous page of the most recent dataset search.
+
+        This tool reuses the last dataset-search filters and paging context stored by
+        `search-datasets`, so callers do not need to manage pagination cursors directly.
+
+        Args:
+            format: Optional override for the output format (summary, detailed, raw)
+
+        Returns:
+            Formatted previous page of dataset search results
+        """
+        LOGGER.debug("Tool previous-search-page called format=%s", format)
+        try:
+            search_kwargs, local_filters, format_type = (
+                pagination_store.get_search_followup(
+                    "previous", format_override=format)
+            )
+            result = await _execute_dataset_search_request(
+                client,
+                search_kwargs=search_kwargs,
+                local_filters=local_filters,
+            )
+            pagination_store.save_search(
+                search_kwargs=search_kwargs,
+                local_filters=local_filters,
+                format_type=format_type,
+                result=result,
+            )
+            formatted = client.format_results(result, format_type)
+            return _render_formatted_output(formatted, format_type)
+        except Exception as exc:
+            return _tool_error_response(
+                "previous-search-page",
+                exc,
+                verbose=verbose_mode,
+                context=_context_without_none({"format": format}),
             )
 
     @server.tool(
@@ -2396,13 +2631,13 @@ def main():
                 page_size=page_size,
                 cursor=cursor,
             )
+            pagination_store.save_versions(
+                identifier=id,
+                format_type=format,
+                result=result,
+            )
             formatted = client.format_dataset_versions(result, format)
-
-            if format == "raw":
-                return json.dumps(formatted, indent=2)
-            if isinstance(formatted, dict):
-                return json.dumps(formatted, indent=2)
-            return str(formatted)
+            return _render_formatted_output(formatted, format)
 
         except Exception as exc:
             return _tool_error_response(
@@ -2417,6 +2652,92 @@ def main():
                         "format": format,
                     }
                 ),
+            )
+
+    @server.tool(
+        name="next-dataset-versions-page",
+        description="Show the next page of the most recent dataset-version history request",
+    )
+    async def next_dataset_versions_page(format: Optional[str] = None) -> str:
+        """
+        Show the next page of the most recent dataset-version history request.
+
+        This tool reuses the last version-history paging context stored by
+        `get-dataset-versions`, so callers do not need to manage pagination cursors
+        directly.
+
+        Args:
+            format: Optional override for the output format (summary, detailed, raw)
+
+        Returns:
+            Formatted next page of dataset version history
+        """
+        LOGGER.debug("Tool next-dataset-versions-page called format=%s", format)
+        try:
+            identifier, cursor_value, format_type = (
+                pagination_store.get_versions_followup(
+                    "next", format_override=format)
+            )
+            result = await client.get_dataset_versions(
+                identifier,
+                cursor=cursor_value,
+            )
+            pagination_store.save_versions(
+                identifier=identifier,
+                format_type=format_type,
+                result=result,
+            )
+            formatted = client.format_dataset_versions(result, format_type)
+            return _render_formatted_output(formatted, format_type)
+        except Exception as exc:
+            return _tool_error_response(
+                "next-dataset-versions-page",
+                exc,
+                verbose=verbose_mode,
+                context=_context_without_none({"format": format}),
+            )
+
+    @server.tool(
+        name="previous-dataset-versions-page",
+        description="Show the previous page of the most recent dataset-version history request",
+    )
+    async def previous_dataset_versions_page(format: Optional[str] = None) -> str:
+        """
+        Show the previous page of the most recent dataset-version history request.
+
+        This tool reuses the last version-history paging context stored by
+        `get-dataset-versions`, so callers do not need to manage pagination cursors
+        directly.
+
+        Args:
+            format: Optional override for the output format (summary, detailed, raw)
+
+        Returns:
+            Formatted previous page of dataset version history
+        """
+        LOGGER.debug("Tool previous-dataset-versions-page called format=%s", format)
+        try:
+            identifier, cursor_value, format_type = (
+                pagination_store.get_versions_followup(
+                    "previous", format_override=format)
+            )
+            result = await client.get_dataset_versions(
+                identifier,
+                cursor=cursor_value,
+            )
+            pagination_store.save_versions(
+                identifier=identifier,
+                format_type=format_type,
+                result=result,
+            )
+            formatted = client.format_dataset_versions(result, format_type)
+            return _render_formatted_output(formatted, format_type)
+        except Exception as exc:
+            return _tool_error_response(
+                "previous-dataset-versions-page",
+                exc,
+                verbose=verbose_mode,
+                context=_context_without_none({"format": format}),
             )
 
     @server.tool(

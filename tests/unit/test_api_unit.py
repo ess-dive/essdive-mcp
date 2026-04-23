@@ -21,6 +21,7 @@ from essdive_mcp.main import (
     _apply_local_dataset_filters,
     _default_dataset_search_is_public,
     _resolve_startup_api_token,
+    PaginationStateStore,
 )
 import pytest
 import os
@@ -94,6 +95,95 @@ class TestDatasetSearchVisibilityDefaults:
     def test_authenticated_search_allows_private_matches(self):
         """Authenticated search should not force the API back to public-only."""
         assert _default_dataset_search_is_public("token-123") is None
+
+
+class TestPaginationStateStore:
+    """Tests for server-side pagination state used by next/previous page tools."""
+
+    def test_search_followup_reuses_stored_filters_and_next_cursor(self):
+        """Next-search-page should reuse the most recent search context."""
+        store = PaginationStateStore()
+
+        store.save_search(
+            search_kwargs={
+                "text": "soil carbon",
+                "sort": "name:asc",
+                "page_size": 2,
+                "cursor": None,
+                "row_start": 1,
+            },
+            local_filters={"funder": ["DOE"]},
+            format_type="summary",
+            result={"nextCursor": "next-cursor-123", "previousCursor": None},
+        )
+
+        search_kwargs, local_filters, format_type = store.get_search_followup("next")
+
+        assert search_kwargs == {
+            "text": "soil carbon",
+            "sort": "name:asc",
+            "page_size": None,
+            "cursor": "next-cursor-123",
+            "row_start": None,
+        }
+        assert local_filters == {"funder": ["DOE"]}
+        assert format_type == "summary"
+
+    def test_search_followup_allows_format_override(self):
+        """Follow-up search tools may override the stored output format."""
+        store = PaginationStateStore()
+        store.save_search(
+            search_kwargs={"text": "soil carbon"},
+            local_filters={},
+            format_type="summary",
+            result={"nextCursor": "next-cursor-123", "previousCursor": None},
+        )
+
+        _, _, format_type = store.get_search_followup("next", format_override="raw")
+
+        assert format_type == "raw"
+
+    def test_search_followup_requires_existing_state(self):
+        """Paging without a prior search should raise a clear error."""
+        store = PaginationStateStore()
+
+        with pytest.raises(ValueError, match="No prior dataset search"):
+            store.get_search_followup("next")
+
+    def test_search_followup_requires_requested_direction_cursor(self):
+        """Paging should fail cleanly when no next/previous cursor exists."""
+        store = PaginationStateStore()
+        store.save_search(
+            search_kwargs={"text": "soil carbon"},
+            local_filters={},
+            format_type="summary",
+            result={"nextCursor": None, "previousCursor": None},
+        )
+
+        with pytest.raises(ValueError, match="No next page is available"):
+            store.get_search_followup("next")
+
+    def test_versions_followup_reuses_identifier_and_cursor(self):
+        """Next/previous version-page tools should reuse the last versions request."""
+        store = PaginationStateStore()
+        store.save_versions(
+            identifier="doi:10.1234/example",
+            format_type="detailed",
+            result={"nextCursor": "next-version-cursor", "previousCursor": None},
+        )
+
+        identifier, cursor, format_type = store.get_versions_followup("next")
+
+        assert identifier == "doi:10.1234/example"
+        assert cursor == "next-version-cursor"
+        assert format_type == "detailed"
+
+    def test_versions_followup_requires_existing_state(self):
+        """Paging versions without a prior request should raise a clear error."""
+        store = PaginationStateStore()
+
+        with pytest.raises(ValueError, match="No prior dataset-version request"):
+            store.get_versions_followup("next")
 
 
 class TestToolErrorPayload:
@@ -469,6 +559,76 @@ class TestESSDiveClient:
             assert "rowStart" not in params
 
     @pytest.mark.asyncio
+    async def test_search_datasets_cursor_followup_flow_uses_returned_next_cursor(self):
+        """A first page's nextCursor should work unchanged for a follow-up page request."""
+        client = ESSDiveClient(api_token="test_token")
+
+        first_response = {
+            "total": 3,
+            "pageSize": 2,
+            "nextCursor": "next-cursor-123",
+            "previousCursor": None,
+            "query": {"text": "soil carbon", "sort": "name:asc"},
+            "result": [
+                {"id": "ds1", "dataset": {"name": "Dataset 1"}},
+                {"id": "ds2", "dataset": {"name": "Dataset 2"}},
+            ],
+        }
+        second_response = {
+            "total": 3,
+            "pageSize": 2,
+            "nextCursor": None,
+            "previousCursor": "prev-cursor-123",
+            "query": {"text": "soil carbon", "sort": "name:asc"},
+            "result": [
+                {"id": "ds3", "dataset": {"name": "Dataset 3"}},
+            ],
+        }
+
+        first_response_obj = Mock()
+        first_response_obj.json.return_value = first_response
+        first_response_obj.raise_for_status = Mock()
+
+        second_response_obj = Mock()
+        second_response_obj.json.return_value = second_response
+        second_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                side_effect=[first_response_obj, second_response_obj]
+            )
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            first_page = await client.search_datasets(
+                text="soil carbon",
+                page_size=2,
+                sort="name:asc",
+            )
+            second_page = await client.search_datasets(
+                text="soil carbon",
+                sort="name:asc",
+                cursor=first_page["nextCursor"],
+            )
+
+            assert first_page["nextCursor"] == "next-cursor-123"
+            assert second_page["result"][0]["id"] == "ds3"
+            assert second_page["previousCursor"] == "prev-cursor-123"
+
+            first_params = mock_client_instance.get.call_args_list[0].kwargs["params"]
+            second_params = mock_client_instance.get.call_args_list[1].kwargs["params"]
+            assert first_params["pageSize"] == 2
+            assert first_params["text"] == "soil carbon"
+            assert first_params["sort"] == "name:asc"
+            assert second_params == {
+                "cursor": "next-cursor-123",
+                "text": "soil carbon",
+                "sort": "name:asc",
+            }
+
+    @pytest.mark.asyncio
     async def test_search_datasets_accepts_string_bbox(self):
         """bbox may be provided in the API's comma-delimited string format."""
         client = ESSDiveClient(api_token="test_token")
@@ -803,6 +963,66 @@ class TestESSDiveClient:
 
             params = mock_client_instance.get.call_args.kwargs["params"]
             assert params == {"cursor": "cursor-123"}
+
+    @pytest.mark.asyncio
+    async def test_get_dataset_versions_cursor_followup_flow_uses_returned_next_cursor(self):
+        """A versions response nextCursor should work unchanged for a follow-up page request."""
+        client = ESSDiveClient(api_token="test_token")
+
+        first_response = {
+            "total": 3,
+            "pageSize": 2,
+            "nextCursor": "next-version-cursor",
+            "previousCursor": None,
+            "result": [
+                {"id": "ds-v3", "dataset": {"@id": "doi:10.1234/example"}},
+                {"id": "ds-v2", "dataset": {"@id": "doi:10.1234/example"}},
+            ],
+        }
+        second_response = {
+            "total": 3,
+            "pageSize": 2,
+            "nextCursor": None,
+            "previousCursor": "prev-version-cursor",
+            "result": [
+                {"id": "ds-v1", "dataset": {"@id": "doi:10.1234/example"}},
+            ],
+        }
+
+        first_response_obj = Mock()
+        first_response_obj.json.return_value = first_response
+        first_response_obj.raise_for_status = Mock()
+
+        second_response_obj = Mock()
+        second_response_obj.json.return_value = second_response
+        second_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                side_effect=[first_response_obj, second_response_obj]
+            )
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            first_page = await client.get_dataset_versions(
+                "doi:10.1234/example",
+                page_size=2,
+            )
+            second_page = await client.get_dataset_versions(
+                "doi:10.1234/example",
+                cursor=first_page["nextCursor"],
+            )
+
+            assert first_page["nextCursor"] == "next-version-cursor"
+            assert second_page["result"][0]["id"] == "ds-v1"
+            assert second_page["previousCursor"] == "prev-version-cursor"
+
+            first_params = mock_client_instance.get.call_args_list[0].kwargs["params"]
+            second_params = mock_client_instance.get.call_args_list[1].kwargs["params"]
+            assert first_params == {"pageSize": 2}
+            assert second_params == {"cursor": "next-version-cursor"}
 
     @pytest.mark.asyncio
     async def test_get_dataset_status(self):

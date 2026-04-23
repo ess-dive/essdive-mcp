@@ -12,10 +12,13 @@ MCP Tools Available:
     provider, publication date, temporal coverage, keywords, geographic bounds/nearby
     search, and local metadata-aware post-filters for fields exposed on full dataset
     records. Supports pagination and multiple result formats.
-  - get-dataset: Retrieve detailed metadata for a specific dataset including creators,
-    keywords, description, and available data files.
+  - get-dataset: Retrieve detailed metadata for a specific dataset, including top-level
+    package fields such as isPublic, dateUploaded, dateModified, citation, and
+    available data files.
   - get-dataset-versions: List visible versions of a dataset from newest to oldest,
     with cursor-based pagination support for version history navigation.
+  - get-dataset-status: Get workflow/status metadata for a dataset from the
+    /packages/{identifier}/status endpoint.
   - get-dataset-permissions: Get sharing and access permission information for datasets.
 
 **Identifier Conversion:**
@@ -1266,6 +1269,8 @@ class ESSDiveClient:
                 ds_data = dataset.get("dataset", {})
                 summary += f"{i}. {ds_data.get('name', 'Untitled')}\n"
                 summary += f"   ID: {dataset.get('id', 'Unknown')}\n"
+                if "isPublic" in dataset:
+                    summary += f"   isPublic: {dataset.get('isPublic')}\n"
                 summary += f"   Published: {ds_data.get('datePublished', 'Unknown')}\n"
                 summary += f"   URL: {dataset.get('viewUrl', 'Unknown')}\n"
                 if i < len(datasets):
@@ -1280,6 +1285,12 @@ class ESSDiveClient:
                 ds_data = dataset.get("dataset", {})
                 detailed += f"{i}. {ds_data.get('name', 'Untitled')}\n"
                 detailed += f"   ID: {dataset.get('id', 'Unknown')}\n"
+                if "isPublic" in dataset:
+                    detailed += f"   isPublic: {dataset.get('isPublic')}\n"
+                if dataset.get("dateUploaded"):
+                    detailed += f"   dateUploaded: {dataset.get('dateUploaded')}\n"
+                if dataset.get("dateModified"):
+                    detailed += f"   dateModified: {dataset.get('dateModified')}\n"
                 detailed += f"   Published: {ds_data.get('datePublished', 'Unknown')}\n"
                 detailed += f"   URL: {dataset.get('viewUrl', 'Unknown')}\n"
 
@@ -1340,12 +1351,174 @@ class ESSDiveClient:
                 if license_value:
                     detailed += f"   License: {license_value}\n"
 
+                citation = dataset.get("citation")
+                if citation:
+                    detailed += f"   citation: {citation}\n"
+
                 if i < len(datasets):
                     detailed += "\n"
 
             return detailed
 
         return results
+
+    def format_dataset(
+        self, result: Dict[str, Any], format_type: str = "detailed"
+    ) -> Union[str, Dict[str, Any]]:
+        """
+        Format a single dataset record into a readable summary.
+
+        Args:
+            result: The API response from GET /packages/{identifier}
+            format_type: Type of formatting ('summary', 'detailed', 'raw')
+
+        Returns:
+            Formatted dataset metadata as string or dict
+        """
+        if format_type == "raw":
+            return result
+
+        dataset = result.get("dataset")
+        if not isinstance(dataset, dict):
+            return "No dataset found or invalid response format."
+
+        name = dataset.get("name", "Untitled")
+        description = dataset.get("description", "")
+        if isinstance(description, list):
+            description = " ".join(description)
+
+        doi = dataset.get("@id") or dataset.get("doi")
+        content = f"# {name}\n\n"
+        content += f"**id**: {result.get('id', 'Unknown')}\n"
+        if doi:
+            content += f"**doi**: {doi}\n"
+        if result.get("viewUrl"):
+            content += f"**viewUrl**: {result.get('viewUrl')}\n"
+        if result.get("dateUploaded"):
+            content += f"**dateUploaded**: {result.get('dateUploaded')}\n"
+        if result.get("dateModified"):
+            content += f"**dateModified**: {result.get('dateModified')}\n"
+        if "isPublic" in result:
+            content += f"**isPublic**: {result.get('isPublic')}\n"
+        if dataset.get("datePublished"):
+            content += f"**datePublished**: {dataset.get('datePublished')}\n"
+        if result.get("citation"):
+            content += f"**citation**: {result.get('citation')}\n"
+        content += "\n"
+
+        if format_type == "summary":
+            if description:
+                content += f"## Description\n{description}\n"
+            return content.rstrip()
+
+        if description:
+            content += f"## Description\n{description}\n\n"
+
+        creators = dataset.get("creator", [])
+        if not isinstance(creators, list):
+            creators = [creators]
+
+        if creators:
+            content += "## Creators\n"
+            for creator in creators:
+                given_name = creator.get("givenName", "")
+                family_name = creator.get("familyName", "")
+                creator_name = f"{given_name} {family_name}".strip()
+                affiliation = creator.get("affiliation", "")
+
+                content += f"- {creator_name}"
+                if affiliation:
+                    content += f" ({affiliation})"
+                content += "\n"
+            content += "\n"
+
+        keywords = dataset.get("keywords", [])
+        if not isinstance(keywords, list):
+            keywords = [keywords]
+
+        if keywords:
+            content += "## Keywords\n"
+            content += ", ".join(keywords)
+            content += "\n\n"
+
+        alternate_names = _as_string_list(dataset.get("alternateName"))
+        if alternate_names:
+            content += "## Alternate Names / Identifiers\n"
+            content += ", ".join(alternate_names)
+            content += "\n\n"
+
+        temporal_coverage = _summarize_temporal_coverage(
+            dataset.get("temporalCoverage")
+        )
+        if temporal_coverage:
+            content += "## Temporal Coverage\n"
+            content += f"{temporal_coverage}\n\n"
+
+        spatial_coverage = _summarize_spatial_coverage(
+            dataset.get("spatialCoverage")
+        )
+        if spatial_coverage:
+            content += "## Spatial Coverage\n"
+            for location in spatial_coverage:
+                content += f"- {location}\n"
+            content += "\n"
+
+        variables_measured = _as_string_list(dataset.get("variableMeasured"))
+        if variables_measured:
+            content += "## Variables Measured\n"
+            content += ", ".join(variables_measured)
+            content += "\n\n"
+
+        measurement_techniques = _as_string_list(
+            dataset.get("measurementTechnique")
+        )
+        if measurement_techniques:
+            content += "## Measurement Techniques\n"
+            for technique in measurement_techniques:
+                content += f"- {_truncate_text(technique, 500)}\n"
+            content += "\n"
+
+        funders = []
+        for funder in _as_list(dataset.get("funder")):
+            if isinstance(funder, dict):
+                funder_name = ", ".join(_organization_search_strings(funder))
+                if funder_name:
+                    funders.append(funder_name)
+            else:
+                funders.extend(_as_string_list(funder))
+        if funders:
+            content += "## Funders\n"
+            for funder in funders:
+                content += f"- {funder}\n"
+            content += "\n"
+
+        editor = dataset.get("editor")
+        if isinstance(editor, dict):
+            editor_details = _person_search_strings(editor)
+            if editor_details:
+                content += "## Contact\n"
+                content += f"- {', '.join(editor_details)}\n\n"
+
+        license_value = dataset.get("license")
+        if license_value:
+            content += "## License\n"
+            content += f"{license_value}\n\n"
+
+        distribution = dataset.get("distribution", [])
+        if distribution:
+            content += "## Data Files\n"
+            for file in distribution:
+                file_name = file.get("name", "Unknown")
+                file_size = file.get("contentSize", 0)
+                file_format = file.get("encodingFormat", "Unknown")
+                file_url = file.get("contentUrl", "Unknown")
+                file_id = file.get("identifier", "Unknown")
+                content += (
+                    f"- {file_name} ({file_size} KB, {file_format}) "
+                    f"URL: {file_url} ID: {file_id}\n"
+                )
+
+        return content
 
     def format_dataset_versions(
         self, results: Dict[str, Any], format_type: str = "summary"
@@ -1389,9 +1562,11 @@ class ESSDiveClient:
                 summary += f"   ID: {version.get('id', 'Unknown')}\n"
                 if doi:
                     summary += f"   DOI: {doi}\n"
-                summary += f"   Uploaded: {version.get('dateUploaded', 'Unknown')}\n"
+                if "isPublic" in version:
+                    summary += f"   isPublic: {version.get('isPublic')}\n"
+                summary += f"   dateUploaded: {version.get('dateUploaded', 'Unknown')}\n"
                 summary += f"   Published: {dataset.get('datePublished', 'Unknown')}\n"
-                summary += f"   URL: {version.get('viewUrl', 'Unknown')}\n"
+                summary += f"   viewUrl: {version.get('viewUrl', 'Unknown')}\n"
                 if i < len(versions):
                     summary += "\n"
 
@@ -1407,12 +1582,12 @@ class ESSDiveClient:
                 detailed += f"   ID: {version.get('id', 'Unknown')}\n"
                 if doi:
                     detailed += f"   DOI: {doi}\n"
-                detailed += f"   Uploaded: {version.get('dateUploaded', 'Unknown')}\n"
-                detailed += f"   Modified: {version.get('dateModified', 'Unknown')}\n"
+                detailed += f"   dateUploaded: {version.get('dateUploaded', 'Unknown')}\n"
+                detailed += f"   dateModified: {version.get('dateModified', 'Unknown')}\n"
                 detailed += f"   Published: {dataset.get('datePublished', 'Unknown')}\n"
-                detailed += f"   Public: {version.get('isPublic', 'Unknown')}\n"
-                detailed += f"   View URL: {version.get('viewUrl', 'Unknown')}\n"
-                detailed += f"   API URL: {version.get('url', 'Unknown')}\n"
+                detailed += f"   isPublic: {version.get('isPublic', 'Unknown')}\n"
+                detailed += f"   viewUrl: {version.get('viewUrl', 'Unknown')}\n"
+                detailed += f"   url: {version.get('url', 'Unknown')}\n"
 
                 description = dataset.get("description", "")
                 if isinstance(description, list):
@@ -1425,7 +1600,7 @@ class ESSDiveClient:
 
                 citation = version.get("citation")
                 if citation:
-                    detailed += f"   Citation: {citation}\n"
+                    detailed += f"   citation: {citation}\n"
 
                 if version.get("next"):
                     detailed += f"   Newer Version URL: {version['next']}\n"
@@ -1990,147 +2165,67 @@ def main():
         name="get-dataset",
         description="Get detailed information about a specific dataset",
     )
-    async def get_dataset(id: str) -> str:
+    async def get_dataset(id: str, format: str = "detailed") -> str:
         """
         Get detailed information about a specific dataset.
 
         Args:
             id: ESS-DIVE dataset identifier
+            format: Format of the results (summary, detailed, raw)
 
         Examples:
             get-dataset with id="ess-dive-9ea5fe57db73c90-20241024T093714082510"
+            get-dataset with id="doi:10.15485/2529445" and format="raw"
 
         Returns:
             Formatted dataset information
         """
-        LOGGER.debug("Tool get-dataset called id=%s", id)
+        LOGGER.debug("Tool get-dataset called id=%s format=%s", id, format)
         try:
             result = await client.get_dataset(id)
-
-            # Format the result
-            dataset = result.get("dataset", {})
-            name = dataset.get("name", "Untitled")
-            description = dataset.get("description", "")
-            if isinstance(description, list):
-                description = " ".join(description)
-
-            # Format basic metadata
-            content = f"# {name}\n\n"
-            content += f"**ID**: {result.get('id', 'Unknown')}\n"
-            content += f"**Published**: {dataset.get('datePublished', 'Unknown')}\n\n"
-            content += f"## Description\n{description}\n\n"
-
-            # Format creators
-            creators = dataset.get("creator", [])
-            if not isinstance(creators, list):
-                creators = [creators]
-
-            if creators:
-                content += "## Creators\n"
-                for creator in creators:
-                    given_name = creator.get("givenName", "")
-                    family_name = creator.get("familyName", "")
-                    creator_name = f"{given_name} {family_name}".strip()
-                    affiliation = creator.get("affiliation", "")
-
-                    content += f"- {creator_name}"
-                    if affiliation:
-                        content += f" ({affiliation})"
-                    content += "\n"
-                content += "\n"
-
-            # Format keywords
-            keywords = dataset.get("keywords", [])
-            if not isinstance(keywords, list):
-                keywords = [keywords]
-
-            if keywords:
-                content += "## Keywords\n"
-                content += ", ".join(keywords)
-                content += "\n\n"
-
-            alternate_names = _as_string_list(dataset.get("alternateName"))
-            if alternate_names:
-                content += "## Alternate Names / Identifiers\n"
-                content += ", ".join(alternate_names)
-                content += "\n\n"
-
-            temporal_coverage = _summarize_temporal_coverage(
-                dataset.get("temporalCoverage")
-            )
-            if temporal_coverage:
-                content += "## Temporal Coverage\n"
-                content += f"{temporal_coverage}\n\n"
-
-            spatial_coverage = _summarize_spatial_coverage(
-                dataset.get("spatialCoverage")
-            )
-            if spatial_coverage:
-                content += "## Spatial Coverage\n"
-                for location in spatial_coverage:
-                    content += f"- {location}\n"
-                content += "\n"
-
-            variables_measured = _as_string_list(
-                dataset.get("variableMeasured"))
-            if variables_measured:
-                content += "## Variables Measured\n"
-                content += ", ".join(variables_measured)
-                content += "\n\n"
-
-            measurement_techniques = _as_string_list(
-                dataset.get("measurementTechnique")
-            )
-            if measurement_techniques:
-                content += "## Measurement Techniques\n"
-                for technique in measurement_techniques:
-                    content += f"- {_truncate_text(technique, 500)}\n"
-                content += "\n"
-
-            funders = []
-            for funder in _as_list(dataset.get("funder")):
-                if isinstance(funder, dict):
-                    funder_name = ", ".join(
-                        _organization_search_strings(funder))
-                    if funder_name:
-                        funders.append(funder_name)
-                else:
-                    funders.extend(_as_string_list(funder))
-            if funders:
-                content += "## Funders\n"
-                for funder in funders:
-                    content += f"- {funder}\n"
-                content += "\n"
-
-            editor = dataset.get("editor")
-            if isinstance(editor, dict):
-                editor_details = _person_search_strings(editor)
-                if editor_details:
-                    content += "## Contact\n"
-                    content += f"- {', '.join(editor_details)}\n\n"
-
-            license_value = dataset.get("license")
-            if license_value:
-                content += "## License\n"
-                content += f"{license_value}\n\n"
-
-            # Format data files if available
-            distribution = dataset.get("distribution", [])
-            if distribution:
-                content += "## Data Files\n"
-                for file in distribution:
-                    file_name = file.get("name", "Unknown")
-                    file_size = file.get("contentSize", 0)
-                    file_format = file.get("encodingFormat", "Unknown")
-                    file_url = file.get("contentUrl", "Unknown")
-                    file_id = file.get("identifier", "Unknown")
-                    content += f"- {file_name} ({file_size} KB, {file_format}) URL: {file_url} ID: {file_id}\n"
-
-            return content
+            formatted = client.format_dataset(result, format)
+            if format == "raw":
+                return json.dumps(formatted, indent=2)
+            if isinstance(formatted, dict):
+                return json.dumps(formatted, indent=2)
+            return str(formatted)
 
         except Exception as exc:
             return _tool_error_response(
                 "get-dataset",
+                exc,
+                verbose=verbose_mode,
+                context=_context_without_none({"id": id, "format": format}),
+            )
+
+    @server.tool(
+        name="get-dataset-status",
+        description="Get publication/workflow status information for a specific dataset",
+    )
+    async def get_dataset_status_tool(id: str) -> str:
+        """
+        Get workflow/status information for a dataset from the status endpoint.
+
+        Use this tool when the user explicitly asks for a dataset's status rather than
+        its general metadata. For multiple datasets, call the tool once per identifier.
+        This endpoint may require an ESS-DIVE API token and appropriate dataset access.
+
+        Args:
+            id: ESS-DIVE dataset identifier
+
+        Examples:
+            get-dataset-status with id="ess-dive-f78cb03d11550da-20260309T160313214"
+
+        Returns:
+            JSON string containing the dataset status response
+        """
+        LOGGER.debug("Tool get-dataset-status called id=%s", id)
+        try:
+            result = await client.get_dataset_status(id)
+            return json.dumps(result, indent=2)
+        except Exception as exc:
+            return _tool_error_response(
+                "get-dataset-status",
                 exc,
                 verbose=verbose_mode,
                 context={"id": id},

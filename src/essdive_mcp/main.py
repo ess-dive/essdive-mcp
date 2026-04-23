@@ -84,6 +84,9 @@ LOGGER = logging.getLogger("essdive_mcp")
 REQUEST_TIMEOUT_SECONDS = 30.0
 PAGINATION_STATE_TTL_SECONDS = 1800.0
 PAGINATION_STATE_CLEANUP_INTERVAL_SECONDS = 60.0
+DEFAULT_HTTP_HOST = "127.0.0.1"
+DEFAULT_HTTP_PORT = 8000
+DEFAULT_HTTP_PATH = "/mcp"
 T = TypeVar("T")
 PROJECT_PORTALS_PATH = (
     Path(__file__).resolve().parents[2]
@@ -477,6 +480,18 @@ class VersionsPaginationState:
     last_touched_monotonic: float
 
 
+@dataclass(frozen=True)
+class ServerRuntimeConfig:
+    """Resolved runtime settings for the MCP server process."""
+
+    transport: str
+    host: Optional[str]
+    port: Optional[int]
+    path: Optional[str]
+    json_response: bool
+    stateless_http: bool
+
+
 class PaginationStateStore:
     """Track per-session pagination chains with idle expiry."""
 
@@ -685,6 +700,105 @@ async def _run_pagination_state_cleanup(
         expired_entries = pagination_store.prune_expired()
         if expired_entries:
             LOGGER.debug("Expired %s idle pagination-state entries", expired_entries)
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    """Create the command-line parser for the MCP entrypoint."""
+    parser = argparse.ArgumentParser(description="Run an ESS-DIVE MCP server")
+    parser.add_argument(
+        "--token",
+        "-t",
+        help="Optional ESS-DIVE API token for authenticated/private-data requests (can also use ESSDIVE_API_TOKEN env var)",
+    )
+    parser.add_argument(
+        "--token-file",
+        help="Path to a file containing an optional ESS-DIVE API token",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "http", "streamable-http", "sse"],
+        help=(
+            "Server transport to use. Defaults to stdio for local MCP clients. "
+            "Use streamable-http for hosted/Docker deployments."
+        ),
+    )
+    parser.add_argument(
+        "--host",
+        help="Bind address for HTTP/SSE transports",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        help="Port for HTTP/SSE transports",
+    )
+    parser.add_argument(
+        "--path",
+        help="HTTP endpoint path for streamable-http or SSE transports",
+    )
+    parser.add_argument(
+        "--json-response",
+        action="store_true",
+        help="Use JSON response mode for streamable HTTP transport",
+    )
+    parser.add_argument(
+        "--stateless-http",
+        action="store_true",
+        help="Disable sessionful streamable HTTP mode and treat each HTTP request independently",
+    )
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Enable verbose logging and include tracebacks in tool error responses",
+    )
+    return parser
+
+
+def _resolve_runtime_config(args: argparse.Namespace) -> ServerRuntimeConfig:
+    """Resolve runtime transport settings from CLI args and environment."""
+    transport = args.transport or os.getenv("ESSDIVE_MCP_TRANSPORT") or "stdio"
+
+    host = args.host or os.getenv("ESSDIVE_MCP_HOST")
+    port = args.port
+    if port is None:
+        env_port = os.getenv("ESSDIVE_MCP_PORT")
+        if env_port:
+            port = int(env_port)
+    path = args.path or os.getenv("ESSDIVE_MCP_PATH")
+
+    json_response = (
+        args.json_response or _is_truthy(os.getenv("ESSDIVE_MCP_JSON_RESPONSE"))
+    )
+    stateless_http = (
+        args.stateless_http or _is_truthy(os.getenv("ESSDIVE_MCP_STATELESS_HTTP"))
+    )
+
+    if transport == "stdio":
+        return ServerRuntimeConfig(
+            transport="stdio",
+            host=None,
+            port=None,
+            path=None,
+            json_response=False,
+            stateless_http=False,
+        )
+
+    if host is None:
+        host = DEFAULT_HTTP_HOST
+    if port is None:
+        port = DEFAULT_HTTP_PORT
+    if path is None:
+        path = DEFAULT_HTTP_PATH
+
+    normalized_transport = "streamable-http" if transport == "http" else transport
+    return ServerRuntimeConfig(
+        transport=normalized_transport,
+        host=host,
+        port=port,
+        path=path,
+        json_response=json_response,
+        stateless_http=stateless_http,
+    )
 
 
 async def _execute_dataset_search_request(
@@ -2317,24 +2431,9 @@ def _resolve_startup_api_token(
 
 def main():
     """Main entry point for the MCP server."""
-    # Parse command-line arguments
-    parser = argparse.ArgumentParser(description="Run an ESS-DIVE MCP server")
-    parser.add_argument(
-        "--token",
-        "-t",
-        help="Optional ESS-DIVE API token for authenticated/private-data requests (can also use ESSDIVE_API_TOKEN env var)",
-    )
-    parser.add_argument(
-        "--token-file",
-        help="Path to a file containing an optional ESS-DIVE API token",
-    )
-    parser.add_argument(
-        "--verbose",
-        "-v",
-        action="store_true",
-        help="Enable verbose logging and include tracebacks in tool error responses",
-    )
+    parser = _build_arg_parser()
     args = parser.parse_args()
+    runtime_config = _resolve_runtime_config(args)
 
     verbose_mode = args.verbose or _is_truthy(os.getenv("ESSDIVE_MCP_VERBOSE"))
     _configure_logging(verbose_mode)
@@ -2342,10 +2441,20 @@ def main():
     api_token = _resolve_startup_api_token(args.token, token_file=args.token_file)
 
     LOGGER.info(
-        "Starting ESS-DIVE MCP server (verbose=%s, authenticated=%s)",
+        "Starting ESS-DIVE MCP server (transport=%s, verbose=%s, authenticated=%s)",
+        runtime_config.transport,
         verbose_mode,
         bool(api_token),
     )
+    if runtime_config.transport != "stdio":
+        LOGGER.info(
+            "HTTP transport settings host=%s port=%s path=%s stateless_http=%s json_response=%s",
+            runtime_config.host,
+            runtime_config.port,
+            runtime_config.path,
+            runtime_config.stateless_http,
+            runtime_config.json_response,
+        )
 
     # Create a client for the ESS-DIVE API with the provided token
     client = ESSDiveClient(api_token=api_token)
@@ -3459,7 +3568,19 @@ def main():
             )
 
     # Run the server
-    asyncio.run(server.run_stdio_async())
+    if runtime_config.transport == "stdio":
+        asyncio.run(server.run_stdio_async())
+    else:
+        asyncio.run(
+            server.run_http_async(
+                transport=runtime_config.transport,
+                host=runtime_config.host,
+                port=runtime_config.port,
+                path=runtime_config.path,
+                json_response=runtime_config.json_response,
+                stateless_http=runtime_config.stateless_http,
+            )
+        )
 
 
 if __name__ == "__main__":

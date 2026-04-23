@@ -472,47 +472,6 @@ command = "uv"
 args = ["run", "essdive-mcp"]
 ```
 
-If you need authenticated/private-data access, add `ESSDIVE_API_TOKEN` to your Codex MCP server environment or pass `--token-file`.
-
-## Hosted Streamable HTTP
-
-For a hosted MCP deployment, run the server with streamable HTTP transport:
-
-```bash
-uv run essdive-mcp --transport streamable-http --host 0.0.0.0 --port 8000 --path /mcp
-```
-
-Available transport-related options:
-
-- `--transport stdio` keeps the existing local client workflow and remains the default.
-- `--transport streamable-http` enables hosted MCP over HTTP.
-- `--host`, `--port`, and `--path` control the HTTP bind address and MCP endpoint path.
-- `--json-response` enables JSON response mode for streamable HTTP.
-- `--stateless-http` disables sessionful streamable HTTP behavior when you need each request treated independently.
-
-The same settings can also be supplied through environment variables:
-
-```bash
-ESSDIVE_MCP_TRANSPORT=streamable-http
-ESSDIVE_MCP_HOST=0.0.0.0
-ESSDIVE_MCP_PORT=8000
-ESSDIVE_MCP_PATH=/mcp
-ESSDIVE_MCP_JSON_RESPONSE=false
-ESSDIVE_MCP_STATELESS_HTTP=false
-```
-
-Example Docker run:
-
-```bash
-docker build -t essdive-mcp .
-
-docker run --rm -p 8000:8000 \
-  -e ESSDIVE_MCP_TRANSPORT=streamable-http \
-  -e ESSDIVE_MCP_HOST=0.0.0.0 \
-  -e ESSDIVE_MCP_PORT=8000 \
-  essdive-mcp
-```
-
 Then confirm it:
 
 ```bash
@@ -520,6 +479,12 @@ codex mcp get essdive-mcp
 ```
 
 In the Codex TUI, use `/mcp` to inspect active MCP servers.
+
+If you need authenticated/private-data access, add `ESSDIVE_API_TOKEN` to your Codex MCP server environment or pass `--token-file`.
+
+## Hosted Deployment
+
+If you want to run `essdive-mcp` as a hosted MCP server over streamable HTTP, including Docker-based deployment, see [docs/HOSTED_HTTP_SETUP.md](docs/HOSTED_HTTP_SETUP.md).
 
 ### Goose
 

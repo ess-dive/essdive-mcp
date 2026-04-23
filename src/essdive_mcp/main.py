@@ -62,12 +62,15 @@ import csv
 import re
 import logging
 import traceback
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from threading import RLock
+from time import monotonic
 import requests
 from io import StringIO
-from typing import Dict, List, Optional, Any, Union, Awaitable, TypeVar
+from typing import Dict, List, Optional, Any, Union, Awaitable, Callable, TypeVar
 import httpx
 import yaml
 from urllib.parse import quote
@@ -79,6 +82,8 @@ from fastmcp.server.context import Context
 
 LOGGER = logging.getLogger("essdive_mcp")
 REQUEST_TIMEOUT_SECONDS = 30.0
+PAGINATION_STATE_TTL_SECONDS = 1800.0
+PAGINATION_STATE_CLEANUP_INTERVAL_SECONDS = 60.0
 T = TypeVar("T")
 PROJECT_PORTALS_PATH = (
     Path(__file__).resolve().parents[2]
@@ -458,6 +463,7 @@ class SearchPaginationState:
     format_type: str
     next_cursor: Optional[str]
     previous_cursor: Optional[str]
+    last_touched_monotonic: float
 
 
 @dataclass
@@ -468,19 +474,79 @@ class VersionsPaginationState:
     format_type: str
     next_cursor: Optional[str]
     previous_cursor: Optional[str]
+    last_touched_monotonic: float
 
 
 class PaginationStateStore:
-    """Track per-session dataset-search and version-history context."""
+    """Track per-session pagination chains with idle expiry."""
 
-    def __init__(self) -> None:
-        self.search_by_session: Dict[str, SearchPaginationState] = {}
-        self.versions_by_session: Dict[str, VersionsPaginationState] = {}
+    def __init__(
+        self,
+        *,
+        ttl_seconds: float = PAGINATION_STATE_TTL_SECONDS,
+        time_fn: Callable[[], float] = monotonic,
+    ) -> None:
+        self.search_by_session: Dict[str, Dict[str, SearchPaginationState]] = {}
+        self.active_search_by_session: Dict[str, str] = {}
+        self.versions_by_session: Dict[str, Dict[str, VersionsPaginationState]] = {}
+        self.active_versions_by_session: Dict[str, str] = {}
+        self._ttl_seconds = ttl_seconds
+        self._time_fn = time_fn
+        self._lock = RLock()
+
+    def clear_session(self, session_id: str) -> None:
+        """Remove all stored pagination state for a single session."""
+        with self._lock:
+            self.search_by_session.pop(session_id, None)
+            self.active_search_by_session.pop(session_id, None)
+            self.versions_by_session.pop(session_id, None)
+            self.active_versions_by_session.pop(session_id, None)
+
+    def clear_all(self) -> None:
+        """Remove all stored pagination state."""
+        with self._lock:
+            self.search_by_session.clear()
+            self.active_search_by_session.clear()
+            self.versions_by_session.clear()
+            self.active_versions_by_session.clear()
+
+    def prune_expired(self) -> int:
+        """Remove idle pagination state and return the number of entries deleted."""
+        with self._lock:
+            return self._prune_expired_locked(self._time_fn())
+
+    def _prune_expired_locked(self, now: float) -> int:
+        expired_count = 0
+
+        for session_id, states in list(self.search_by_session.items()):
+            for state_id, state in list(states.items()):
+                if now - state.last_touched_monotonic >= self._ttl_seconds:
+                    del states[state_id]
+                    expired_count += 1
+            active_state_id = self.active_search_by_session.get(session_id)
+            if active_state_id and active_state_id not in states:
+                self.active_search_by_session.pop(session_id, None)
+            if not states:
+                self.search_by_session.pop(session_id, None)
+
+        for session_id, states in list(self.versions_by_session.items()):
+            for state_id, state in list(states.items()):
+                if now - state.last_touched_monotonic >= self._ttl_seconds:
+                    del states[state_id]
+                    expired_count += 1
+            active_state_id = self.active_versions_by_session.get(session_id)
+            if active_state_id and active_state_id not in states:
+                self.active_versions_by_session.pop(session_id, None)
+            if not states:
+                self.versions_by_session.pop(session_id, None)
+
+        return expired_count
 
     def save_search(
         self,
         *,
         session_id: str,
+        state_id: str,
         search_kwargs: Dict[str, Any],
         local_filters: Dict[str, List[str]],
         format_type: str,
@@ -490,13 +556,19 @@ class PaginationStateStore:
         base_kwargs["cursor"] = None
         base_kwargs["row_start"] = None
 
-        self.search_by_session[session_id] = SearchPaginationState(
-            search_kwargs=base_kwargs,
-            local_filters={key: list(values) for key, values in local_filters.items()},
-            format_type=format_type,
-            next_cursor=result.get("nextCursor"),
-            previous_cursor=result.get("previousCursor"),
-        )
+        now = self._time_fn()
+        with self._lock:
+            self._prune_expired_locked(now)
+            session_states = self.search_by_session.setdefault(session_id, {})
+            session_states[state_id] = SearchPaginationState(
+                search_kwargs=base_kwargs,
+                local_filters={key: list(values) for key, values in local_filters.items()},
+                format_type=format_type,
+                next_cursor=result.get("nextCursor"),
+                previous_cursor=result.get("previousCursor"),
+                last_touched_monotonic=now,
+            )
+            self.active_search_by_session[session_id] = state_id
 
     def get_search_followup(
         self,
@@ -504,45 +576,64 @@ class PaginationStateStore:
         direction: str,
         *,
         format_override: Optional[str] = None,
-    ) -> tuple[Dict[str, Any], Dict[str, List[str]], str]:
-        search_state = self.search_by_session.get(session_id)
-        if not search_state:
-            raise ValueError("No prior dataset search is available for pagination.")
-
-        cursor = (
-            search_state.next_cursor
-            if direction == "next"
-            else search_state.previous_cursor
-        )
-        if not cursor:
-            raise ValueError(
-                f"No {direction} page is available for the most recent dataset search."
+    ) -> tuple[str, Dict[str, Any], Dict[str, List[str]], str]:
+        now = self._time_fn()
+        with self._lock:
+            self._prune_expired_locked(now)
+            active_state_id = self.active_search_by_session.get(session_id)
+            session_states = self.search_by_session.get(session_id) or {}
+            search_state = (
+                session_states.get(active_state_id) if active_state_id else None
             )
+            if not search_state:
+                raise ValueError("No prior dataset search is available for pagination.")
 
-        followup_kwargs = dict(search_state.search_kwargs)
-        followup_kwargs["cursor"] = cursor
-        followup_kwargs["row_start"] = None
-        followup_kwargs["page_size"] = None
-        return (
-            followup_kwargs,
-            {key: list(values) for key, values in search_state.local_filters.items()},
-            format_override or search_state.format_type,
-        )
+            cursor = (
+                search_state.next_cursor
+                if direction == "next"
+                else search_state.previous_cursor
+            )
+            if not cursor:
+                raise ValueError(
+                    f"No {direction} page is available for the most recent dataset search."
+                )
+
+            search_state.last_touched_monotonic = now
+            followup_kwargs = dict(search_state.search_kwargs)
+            followup_kwargs["cursor"] = cursor
+            followup_kwargs["row_start"] = None
+            followup_kwargs["page_size"] = None
+            return (
+                active_state_id,
+                followup_kwargs,
+                {
+                    key: list(values)
+                    for key, values in search_state.local_filters.items()
+                },
+                format_override or search_state.format_type,
+            )
 
     def save_versions(
         self,
         *,
         session_id: str,
+        state_id: str,
         identifier: str,
         format_type: str,
         result: Dict[str, Any],
     ) -> None:
-        self.versions_by_session[session_id] = VersionsPaginationState(
-            identifier=identifier,
-            format_type=format_type,
-            next_cursor=result.get("nextCursor"),
-            previous_cursor=result.get("previousCursor"),
-        )
+        now = self._time_fn()
+        with self._lock:
+            self._prune_expired_locked(now)
+            session_states = self.versions_by_session.setdefault(session_id, {})
+            session_states[state_id] = VersionsPaginationState(
+                identifier=identifier,
+                format_type=format_type,
+                next_cursor=result.get("nextCursor"),
+                previous_cursor=result.get("previousCursor"),
+                last_touched_monotonic=now,
+            )
+            self.active_versions_by_session[session_id] = state_id
 
     def get_versions_followup(
         self,
@@ -550,28 +641,50 @@ class PaginationStateStore:
         direction: str,
         *,
         format_override: Optional[str] = None,
-    ) -> tuple[str, str, str]:
-        versions_state = self.versions_by_session.get(session_id)
-        if not versions_state:
-            raise ValueError(
-                "No prior dataset-version request is available for pagination."
+    ) -> tuple[str, str, str, str]:
+        now = self._time_fn()
+        with self._lock:
+            self._prune_expired_locked(now)
+            active_state_id = self.active_versions_by_session.get(session_id)
+            session_states = self.versions_by_session.get(session_id) or {}
+            versions_state = (
+                session_states.get(active_state_id) if active_state_id else None
+            )
+            if not versions_state:
+                raise ValueError(
+                    "No prior dataset-version request is available for pagination."
+                )
+
+            cursor = (
+                versions_state.next_cursor
+                if direction == "next"
+                else versions_state.previous_cursor
+            )
+            if not cursor:
+                raise ValueError(
+                    f"No {direction} page is available for the most recent dataset-version request."
+                )
+
+            versions_state.last_touched_monotonic = now
+            return (
+                active_state_id,
+                versions_state.identifier,
+                cursor,
+                format_override or versions_state.format_type,
             )
 
-        cursor = (
-            versions_state.next_cursor
-            if direction == "next"
-            else versions_state.previous_cursor
-        )
-        if not cursor:
-            raise ValueError(
-                f"No {direction} page is available for the most recent dataset-version request."
-            )
 
-        return (
-            versions_state.identifier,
-            cursor,
-            format_override or versions_state.format_type,
-        )
+async def _run_pagination_state_cleanup(
+    pagination_store: PaginationStateStore,
+    *,
+    interval_seconds: float = PAGINATION_STATE_CLEANUP_INTERVAL_SECONDS,
+) -> None:
+    """Periodically evict idle pagination state while the server is running."""
+    while True:
+        await asyncio.sleep(interval_seconds)
+        expired_entries = pagination_store.prune_expired()
+        if expired_entries:
+            LOGGER.debug("Expired %s idle pagination-state entries", expired_entries)
 
 
 async def _execute_dataset_search_request(
@@ -2234,12 +2347,25 @@ def main():
         bool(api_token),
     )
 
-    # Create a FastMCP server
-    server = FastMCP("essdive_mcp")
-
     # Create a client for the ESS-DIVE API with the provided token
     client = ESSDiveClient(api_token=api_token)
     pagination_store = PaginationStateStore()
+
+    @asynccontextmanager
+    async def server_lifespan(_: FastMCP):
+        cleanup_task = asyncio.create_task(
+            _run_pagination_state_cleanup(pagination_store)
+        )
+        try:
+            yield {}
+        finally:
+            cleanup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await cleanup_task
+            pagination_store.clear_all()
+
+    # Create a FastMCP server
+    server = FastMCP("essdive_mcp", lifespan=server_lifespan)
 
     # Register tool functions
     @server.tool(name="search-datasets", description="Search for datasets in ESS-DIVE")
@@ -2397,6 +2523,7 @@ def main():
             )
             pagination_store.save_search(
                 session_id=ctx.session_id,
+                state_id=ctx.request_id,
                 search_kwargs=search_kwargs,
                 local_filters=local_filters,
                 format_type=format,
@@ -2462,7 +2589,7 @@ def main():
         """
         LOGGER.debug("Tool next-search-page called format=%s", format)
         try:
-            search_kwargs, local_filters, format_type = (
+            state_id, search_kwargs, local_filters, format_type = (
                 pagination_store.get_search_followup(
                     ctx.session_id, "next", format_override=format
                 )
@@ -2474,6 +2601,7 @@ def main():
             )
             pagination_store.save_search(
                 session_id=ctx.session_id,
+                state_id=state_id,
                 search_kwargs=search_kwargs,
                 local_filters=local_filters,
                 format_type=format_type,
@@ -2508,7 +2636,7 @@ def main():
         """
         LOGGER.debug("Tool previous-search-page called format=%s", format)
         try:
-            search_kwargs, local_filters, format_type = (
+            state_id, search_kwargs, local_filters, format_type = (
                 pagination_store.get_search_followup(
                     ctx.session_id, "previous", format_override=format)
             )
@@ -2519,6 +2647,7 @@ def main():
             )
             pagination_store.save_search(
                 session_id=ctx.session_id,
+                state_id=state_id,
                 search_kwargs=search_kwargs,
                 local_filters=local_filters,
                 format_type=format_type,
@@ -2647,6 +2776,7 @@ def main():
             )
             pagination_store.save_versions(
                 session_id=ctx.session_id,
+                state_id=ctx.request_id,
                 identifier=id,
                 format_type=format,
                 result=result,
@@ -2689,7 +2819,7 @@ def main():
         """
         LOGGER.debug("Tool next-dataset-versions-page called format=%s", format)
         try:
-            identifier, cursor_value, format_type = (
+            state_id, identifier, cursor_value, format_type = (
                 pagination_store.get_versions_followup(
                     ctx.session_id, "next", format_override=format)
             )
@@ -2699,6 +2829,7 @@ def main():
             )
             pagination_store.save_versions(
                 session_id=ctx.session_id,
+                state_id=state_id,
                 identifier=identifier,
                 format_type=format_type,
                 result=result,
@@ -2733,7 +2864,7 @@ def main():
         """
         LOGGER.debug("Tool previous-dataset-versions-page called format=%s", format)
         try:
-            identifier, cursor_value, format_type = (
+            state_id, identifier, cursor_value, format_type = (
                 pagination_store.get_versions_followup(
                     ctx.session_id, "previous", format_override=format)
             )
@@ -2743,6 +2874,7 @@ def main():
             )
             pagination_store.save_versions(
                 session_id=ctx.session_id,
+                state_id=state_id,
                 identifier=identifier,
                 format_type=format_type,
                 result=result,

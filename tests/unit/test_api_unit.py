@@ -106,6 +106,7 @@ class TestPaginationStateStore:
 
         store.save_search(
             session_id="session-a",
+            state_id="request-1",
             search_kwargs={
                 "text": "soil carbon",
                 "sort": "name:asc",
@@ -118,9 +119,10 @@ class TestPaginationStateStore:
             result={"nextCursor": "next-cursor-123", "previousCursor": None},
         )
 
-        search_kwargs, local_filters, format_type = store.get_search_followup(
+        state_id, search_kwargs, local_filters, format_type = store.get_search_followup(
             "session-a", "next")
 
+        assert state_id == "request-1"
         assert search_kwargs == {
             "text": "soil carbon",
             "sort": "name:asc",
@@ -136,13 +138,14 @@ class TestPaginationStateStore:
         store = PaginationStateStore()
         store.save_search(
             session_id="session-a",
+            state_id="request-1",
             search_kwargs={"text": "soil carbon"},
             local_filters={},
             format_type="summary",
             result={"nextCursor": "next-cursor-123", "previousCursor": None},
         )
 
-        _, _, format_type = store.get_search_followup(
+        _, _, _, format_type = store.get_search_followup(
             "session-a", "next", format_override="raw")
 
         assert format_type == "raw"
@@ -159,6 +162,7 @@ class TestPaginationStateStore:
         store = PaginationStateStore()
         store.save_search(
             session_id="session-a",
+            state_id="request-1",
             search_kwargs={"text": "soil carbon"},
             local_filters={},
             format_type="summary",
@@ -173,6 +177,7 @@ class TestPaginationStateStore:
         store = PaginationStateStore()
         store.save_search(
             session_id="session-a",
+            state_id="request-a",
             search_kwargs={"text": "soil carbon"},
             local_filters={},
             format_type="summary",
@@ -180,33 +185,95 @@ class TestPaginationStateStore:
         )
         store.save_search(
             session_id="session-b",
+            state_id="request-b",
             search_kwargs={"text": "wildfire"},
             local_filters={},
             format_type="detailed",
             result={"nextCursor": "next-b", "previousCursor": None},
         )
 
-        kwargs_a, _, format_a = store.get_search_followup("session-a", "next")
-        kwargs_b, _, format_b = store.get_search_followup("session-b", "next")
+        _, kwargs_a, _, format_a = store.get_search_followup("session-a", "next")
+        _, kwargs_b, _, format_b = store.get_search_followup("session-b", "next")
 
         assert kwargs_a["cursor"] == "next-a"
         assert kwargs_b["cursor"] == "next-b"
         assert format_a == "summary"
         assert format_b == "detailed"
 
+    def test_search_followup_keeps_multiple_chains_within_session(self):
+        """A newer search should become active without deleting earlier chains."""
+        store = PaginationStateStore()
+        store.save_search(
+            session_id="session-a",
+            state_id="request-1",
+            search_kwargs={"text": "soil carbon"},
+            local_filters={},
+            format_type="summary",
+            result={"nextCursor": "next-a", "previousCursor": None},
+        )
+        store.save_search(
+            session_id="session-a",
+            state_id="request-2",
+            search_kwargs={"text": "wildfire"},
+            local_filters={"funder": ["DOE"]},
+            format_type="detailed",
+            result={"nextCursor": "next-b", "previousCursor": None},
+        )
+
+        state_id, kwargs, local_filters, format_type = store.get_search_followup(
+            "session-a", "next"
+        )
+
+        assert sorted(store.search_by_session["session-a"]) == ["request-1", "request-2"]
+        assert state_id == "request-2"
+        assert kwargs["text"] == "wildfire"
+        assert kwargs["cursor"] == "next-b"
+        assert local_filters == {"funder": ["DOE"]}
+        assert format_type == "detailed"
+
+    def test_search_followup_updates_existing_chain_after_followup(self):
+        """Follow-up paging should update the active chain instead of allocating a new one."""
+        store = PaginationStateStore()
+        store.save_search(
+            session_id="session-a",
+            state_id="request-1",
+            search_kwargs={"text": "soil carbon", "page_size": 2},
+            local_filters={},
+            format_type="summary",
+            result={"nextCursor": "next-a", "previousCursor": None},
+        )
+        state_id, kwargs, local_filters, format_type = store.get_search_followup(
+            "session-a", "next"
+        )
+
+        store.save_search(
+            session_id="session-a",
+            state_id=state_id,
+            search_kwargs=kwargs,
+            local_filters=local_filters,
+            format_type=format_type,
+            result={"nextCursor": "next-b", "previousCursor": "prev-b"},
+        )
+
+        assert list(store.search_by_session["session-a"]) == ["request-1"]
+        _, kwargs_after, _, _ = store.get_search_followup("session-a", "next")
+        assert kwargs_after["cursor"] == "next-b"
+
     def test_versions_followup_reuses_identifier_and_cursor(self):
         """Next/previous version-page tools should reuse the last versions request."""
         store = PaginationStateStore()
         store.save_versions(
             session_id="session-a",
+            state_id="request-1",
             identifier="doi:10.1234/example",
             format_type="detailed",
             result={"nextCursor": "next-version-cursor", "previousCursor": None},
         )
 
-        identifier, cursor, format_type = store.get_versions_followup(
+        state_id, identifier, cursor, format_type = store.get_versions_followup(
             "session-a", "next")
 
+        assert state_id == "request-1"
         assert identifier == "doi:10.1234/example"
         assert cursor == "next-version-cursor"
         assert format_type == "detailed"
@@ -223,20 +290,22 @@ class TestPaginationStateStore:
         store = PaginationStateStore()
         store.save_versions(
             session_id="session-a",
+            state_id="request-a",
             identifier="doi:10.1234/example-a",
             format_type="summary",
             result={"nextCursor": "next-a", "previousCursor": None},
         )
         store.save_versions(
             session_id="session-b",
+            state_id="request-b",
             identifier="doi:10.1234/example-b",
             format_type="raw",
             result={"nextCursor": "next-b", "previousCursor": None},
         )
 
-        identifier_a, cursor_a, format_a = store.get_versions_followup(
+        _, identifier_a, cursor_a, format_a = store.get_versions_followup(
             "session-a", "next")
-        identifier_b, cursor_b, format_b = store.get_versions_followup(
+        _, identifier_b, cursor_b, format_b = store.get_versions_followup(
             "session-b", "next")
 
         assert identifier_a == "doi:10.1234/example-a"
@@ -245,6 +314,90 @@ class TestPaginationStateStore:
         assert identifier_b == "doi:10.1234/example-b"
         assert cursor_b == "next-b"
         assert format_b == "raw"
+
+    def test_versions_followup_keeps_multiple_chains_within_session(self):
+        """Multiple version-history chains should coexist within one session."""
+        store = PaginationStateStore()
+        store.save_versions(
+            session_id="session-a",
+            state_id="request-1",
+            identifier="doi:10.1234/example-a",
+            format_type="summary",
+            result={"nextCursor": "next-a", "previousCursor": None},
+        )
+        store.save_versions(
+            session_id="session-a",
+            state_id="request-2",
+            identifier="doi:10.1234/example-b",
+            format_type="raw",
+            result={"nextCursor": "next-b", "previousCursor": None},
+        )
+
+        state_id, identifier, cursor, format_type = store.get_versions_followup(
+            "session-a", "next"
+        )
+
+        assert sorted(store.versions_by_session["session-a"]) == ["request-1", "request-2"]
+        assert state_id == "request-2"
+        assert identifier == "doi:10.1234/example-b"
+        assert cursor == "next-b"
+        assert format_type == "raw"
+
+    def test_expired_entries_are_pruned(self):
+        """Idle session state should expire after the configured timeout."""
+        current_time = 100.0
+
+        def fake_time() -> float:
+            return current_time
+
+        store = PaginationStateStore(ttl_seconds=30.0, time_fn=fake_time)
+        store.save_search(
+            session_id="session-a",
+            state_id="request-1",
+            search_kwargs={"text": "soil carbon"},
+            local_filters={},
+            format_type="summary",
+            result={"nextCursor": "next-a", "previousCursor": None},
+        )
+        store.save_versions(
+            session_id="session-a",
+            state_id="request-2",
+            identifier="doi:10.1234/example-a",
+            format_type="raw",
+            result={"nextCursor": "next-b", "previousCursor": None},
+        )
+
+        current_time = 131.0
+
+        assert store.prune_expired() == 2
+        with pytest.raises(ValueError, match="No prior dataset search"):
+            store.get_search_followup("session-a", "next")
+        with pytest.raises(ValueError, match="No prior dataset-version request"):
+            store.get_versions_followup("session-a", "next")
+
+    def test_clear_session_removes_search_and_version_state(self):
+        """Explicit session cleanup should drop all pagination data for that session."""
+        store = PaginationStateStore()
+        store.save_search(
+            session_id="session-a",
+            state_id="request-1",
+            search_kwargs={"text": "soil carbon"},
+            local_filters={},
+            format_type="summary",
+            result={"nextCursor": "next-a", "previousCursor": None},
+        )
+        store.save_versions(
+            session_id="session-a",
+            state_id="request-2",
+            identifier="doi:10.1234/example-a",
+            format_type="raw",
+            result={"nextCursor": "next-b", "previousCursor": None},
+        )
+
+        store.clear_session("session-a")
+
+        assert "session-a" not in store.search_by_session
+        assert "session-a" not in store.versions_by_session
 
 
 class TestToolErrorPayload:

@@ -104,6 +104,17 @@ def _is_truthy(value: Optional[str]) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _normalize_api_token(api_token: Optional[str]) -> Optional[str]:
+    """Return a usable API token, or None for unset/null-like values."""
+    if api_token is None:
+        return None
+
+    normalized = api_token.strip()
+    if not normalized or normalized.lower() in {"null", "none"}:
+        return None
+    return normalized
+
+
 def _configure_logging(verbose: bool) -> None:
     """Configure logging for MCP runtime diagnostics."""
     level = logging.DEBUG if verbose else logging.INFO
@@ -1390,10 +1401,10 @@ class ESSDiveClient:
         Args:
             api_token: Optional API token for authenticated requests
         """
-        self.api_token = api_token
+        self.api_token = _normalize_api_token(api_token)
         self.headers = {}
-        if api_token:
-            self.headers["Authorization"] = f"Bearer {api_token}"
+        if self.api_token:
+            self.headers["Authorization"] = f"Bearer {self.api_token}"
 
     def _get_headers(self) -> Dict[str, str]:
         """Get headers for API requests."""
@@ -2399,19 +2410,21 @@ def get_api_key(
     Returns:
         The API key string, or None when no token is configured.
     """
+    api_key = _normalize_api_token(api_key)
+
     if api_key is None and token_file:
         try:
             with open(token_file, "r", encoding="utf-8") as handle:
-                api_key = handle.read().strip()
+                api_key = _normalize_api_token(handle.read())
         except OSError as exc:
             raise ValueError(
                 f"Could not read ESS-DIVE token file: {token_file}"
             ) from exc
 
     if not api_key:
-        api_key = os.getenv("ESSDIVE_API_TOKEN")
+        api_key = _normalize_api_token(os.getenv("ESSDIVE_API_TOKEN"))
 
-    return api_key or None
+    return api_key
 
 
 def _resolve_startup_api_token(

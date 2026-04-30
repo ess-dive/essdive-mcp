@@ -9,6 +9,7 @@ import httpx
 from essdive_mcp.main import (
     ESSDiveClient,
     doi_to_essdive_id,
+    get_api_key,
     get_ess_deepdive_dataset,
     get_ess_deepdive_file,
     search_ess_deepdive,
@@ -123,6 +124,33 @@ async def test_search_public_datasets_live_without_token(
     assert response["total"] > 0
     assert isinstance(response["result"], list)
     assert all(isinstance(item.get("isPublic"), bool) for item in response["result"])
+    assert str(example["expected_id"]) in {
+        item["id"] for item in response["result"]}
+
+
+@pytest.mark.asyncio
+async def test_search_public_datasets_live_with_null_env_token_omits_auth(
+    monkeypatch: pytest.MonkeyPatch,
+    essdive_search_examples: list[dict[str, Any]],
+):
+    """Null-like token config should still use anonymous public ESS-DIVE access."""
+    monkeypatch.setenv("ESSDIVE_API_TOKEN", "null")
+    example = essdive_search_examples[0]
+
+    api_token = get_api_key(None)
+    client = ESSDiveClient(api_token=api_token)
+
+    assert api_token is None
+    assert "Authorization" not in client.headers
+
+    response = await client.search_datasets(
+        text=str(example["query"]),
+        is_public=True,
+        page_size=int(example.get("page_size", 10)),
+    )
+
+    assert isinstance(response, dict)
+    assert response["total"] > 0
     assert str(example["expected_id"]) in {
         item["id"] for item in response["result"]}
 

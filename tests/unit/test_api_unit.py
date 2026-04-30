@@ -7,6 +7,7 @@ from essdive_mcp.main import (
     sanitize_tsv_field,
     _norm_header_key,
     _is_truthy,
+    _normalize_api_token,
     _build_tool_error_payload,
     _normalize_doi,
     doi_to_essdive_id,
@@ -57,6 +58,21 @@ class TestGetApiKey:
         with patch.dict(os.environ, {}, clear=True):
             assert get_api_key(None) is None
 
+    def test_get_api_key_blank_parameter_returns_none(self):
+        """Blank explicit tokens should not create Authorization headers."""
+        with patch.dict(os.environ, {}, clear=True):
+            assert get_api_key("  ") is None
+
+    def test_get_api_key_null_environment_returns_none(self):
+        """Null-like environment values should behave as unset tokens."""
+        with patch.dict(os.environ, {"ESSDIVE_API_TOKEN": "null"}):
+            assert get_api_key(None) is None
+
+    def test_get_api_key_strips_environment_value(self):
+        """Environment tokens should be stripped before use."""
+        with patch.dict(os.environ, {"ESSDIVE_API_TOKEN": "  env_key_456\n"}):
+            assert get_api_key(None) == "env_key_456"
+
     def test_resolve_startup_api_token_warns_and_falls_back_on_bad_token_file(
         self, caplog: pytest.LogCaptureFixture
     ):
@@ -85,6 +101,19 @@ class TestBooleanHelpers:
         assert not _is_truthy("false")
         assert not _is_truthy("")
         assert not _is_truthy(None)
+
+
+class TestApiTokenNormalization:
+    """Tests for optional ESS-DIVE token normalization."""
+
+    def test_normalize_api_token_strips_value(self):
+        """Configured tokens should be stripped before use."""
+        assert _normalize_api_token("  token-123\n") == "token-123"
+
+    @pytest.mark.parametrize("value", [None, "", "  ", "null", " NULL ", "None"])
+    def test_normalize_api_token_empty_or_null_values(self, value):
+        """Empty and null-like token values should mean anonymous access."""
+        assert _normalize_api_token(value) is None
 
 
 class TestDatasetSearchVisibilityDefaults:
@@ -714,6 +743,14 @@ class TestESSDiveClient:
 
         assert client.api_token is None
         assert "Authorization" not in client.headers
+
+    @pytest.mark.parametrize("value", ["", "  ", "null", "None"])
+    def test_client_initialization_empty_or_null_token_omits_auth(self, value):
+        """Unset/null-like tokens should not send Authorization headers."""
+        client = ESSDiveClient(api_token=value)
+
+        assert client.api_token is None
+        assert client.headers == {}
 
     def test_get_headers(self):
         """Test _get_headers method."""

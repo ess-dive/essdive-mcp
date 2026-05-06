@@ -1544,6 +1544,9 @@ class TestFormatResults:
 
         assert "Pagination:" not in formatted
         assert "next-cursor" not in formatted
+        assert "More paged results are available" in formatted
+        assert "`next-search-page`" in formatted
+        assert "`previous-search-page`" not in formatted
 
     def test_format_results_detailed_with_extra_metadata(self):
         """Detailed format should surface richer dataset metadata when present."""
@@ -1618,6 +1621,28 @@ class TestFormatResults:
         assert "Provider: Example Program (Ada Lovelace, principalInvestigator, Example Lab)" in formatted
         assert "Award: DOE Award #12345" in formatted
         assert "citation: Example dataset citation" in formatted
+
+    def test_format_results_pagination_note_mentions_previous_page(self):
+        """Formatted search results should point agents to previous-page tool."""
+        client = ESSDiveClient()
+
+        results = {
+            "result": [
+                {
+                    "id": "ds1",
+                    "dataset": {"name": "Dataset 1", "datePublished": "2024-01-01"},
+                }
+            ],
+            "total": 10,
+            "nextCursor": None,
+            "previousCursor": "previous-cursor",
+        }
+
+        formatted = client.format_results(results, "summary")
+
+        assert "previous-cursor" not in formatted
+        assert "`previous-search-page`" in formatted
+        assert "`next-search-page`" not in formatted
 
     def test_format_results_no_results(self):
         """Test formatting when no results are found."""
@@ -1744,6 +1769,9 @@ class TestFormatResults:
         assert "Results include public data only." in formatted
         assert "Pagination:" not in formatted
         assert "next-cursor" not in formatted
+        assert "More paged results are available" in formatted
+        assert "`next-dataset-versions-page`" in formatted
+        assert "`previous-dataset-versions-page`" not in formatted
         assert "ds-v2" in formatted
         assert "isPublic: True" not in formatted
         assert "dateUploaded: 2026-01-01T00:00:00Z" in formatted

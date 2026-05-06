@@ -846,6 +846,23 @@ def _render_formatted_output(
     return str(formatted)
 
 
+def _pagination_tool_note(
+    result: Dict[str, Any],
+    *,
+    next_tool: str,
+    previous_tool: str,
+) -> str:
+    """Return a cursor-free note that points agents to stateful page tools."""
+    actions = []
+    if result.get("nextCursor"):
+        actions.append(f"use `{next_tool}` for the next page")
+    if result.get("previousCursor"):
+        actions.append(f"use `{previous_tool}` for the previous page")
+    if not actions:
+        return ""
+    return f"\n\nMore paged results are available; {' or '.join(actions)}."
+
+
 def _distribution_search_strings(
     distribution: Any,
     *,
@@ -2183,6 +2200,11 @@ class ESSDiveClient:
                 if i < len(datasets):
                     summary += "\n"
 
+            summary += _pagination_tool_note(
+                results,
+                next_tool="next-search-page",
+                previous_tool="previous-search-page",
+            )
             return summary
 
         elif format_type == "detailed":
@@ -2281,6 +2303,11 @@ class ESSDiveClient:
                 if i < len(datasets):
                     detailed += "\n"
 
+            detailed += _pagination_tool_note(
+                results,
+                next_tool="next-search-page",
+                previous_tool="previous-search-page",
+            )
             return detailed
 
         return results
@@ -2519,6 +2546,11 @@ class ESSDiveClient:
                 if i < len(versions):
                     summary += "\n"
 
+            summary += _pagination_tool_note(
+                results,
+                next_tool="next-dataset-versions-page",
+                previous_tool="previous-dataset-versions-page",
+            )
             return summary
 
         if format_type == "detailed":
@@ -2567,6 +2599,11 @@ class ESSDiveClient:
                 if i < len(versions):
                     detailed += "\n"
 
+            detailed += _pagination_tool_note(
+                results,
+                next_tool="next-dataset-versions-page",
+                previous_tool="previous-dataset-versions-page",
+            )
             return detailed
 
         return results
@@ -2933,7 +2970,15 @@ def main():
     server = FastMCP("essdive_mcp", lifespan=server_lifespan)
 
     # Register tool functions
-    @server.tool(name="search-datasets", description="Search for datasets in ESS-DIVE")
+    @server.tool(
+        name="search-datasets",
+        description=(
+            "Search for datasets in ESS-DIVE. This stores session pagination "
+            "state; when the user asks for more, next page, previous page, or "
+            "continued results from this search, call next-search-page or "
+            "previous-search-page instead of repeating the search."
+        ),
+    )
     async def search_datasets(
         query: Optional[str] = None,
         creator: Optional[str] = None,
@@ -2965,6 +3010,11 @@ def main():
     ) -> str:
         """
         Search for datasets in the ESS-DIVE repository.
+
+        This tool stores session-specific pagination state. If the user later
+        asks for more results, the next page, the previous page, or to continue
+        this same result set, use `next-search-page` or `previous-search-page`
+        rather than calling `search-datasets` again with the same filters.
 
         Args:
             query: Search query text (full-text search)
@@ -3137,7 +3187,12 @@ def main():
 
     @server.tool(
         name="next-search-page",
-        description="Show the next page of the most recent dataset search",
+        description=(
+            "Show the next page of the most recent dataset search in this MCP "
+            "session. Use this for user requests like more, next page, continue, "
+            "or show more results after search-datasets; do not repeat the "
+            "original search."
+        ),
     )
     async def next_search_page(format: Optional[str] = None, ctx: Context = None) -> str:
         """
@@ -3184,7 +3239,11 @@ def main():
 
     @server.tool(
         name="previous-search-page",
-        description="Show the previous page of the most recent dataset search",
+        description=(
+            "Show the previous page of the most recent dataset search in this "
+            "MCP session. Use this when the user asks to go back, previous page, "
+            "or show earlier results from the active search."
+        ),
     )
     async def previous_search_page(format: Optional[str] = None, ctx: Context = None) -> str:
         """
@@ -3370,7 +3429,12 @@ def main():
 
     @server.tool(
         name="get-dataset-versions",
-        description="List visible versions of a specific dataset from newest to oldest",
+        description=(
+            "List visible versions of a specific dataset from newest to oldest. "
+            "This stores session pagination state; when the user asks for more "
+            "versions or the next/previous page, call next-dataset-versions-page "
+            "or previous-dataset-versions-page instead of repeating this request."
+        ),
     )
     async def get_dataset_versions_tool(
         id: str,
@@ -3381,6 +3445,11 @@ def main():
     ) -> str:
         """
         List visible versions for a dataset from newest to oldest.
+
+        This tool stores session-specific pagination state. If the user later
+        asks for more versions, the next page, the previous page, or to continue
+        this same version history, use `next-dataset-versions-page` or
+        `previous-dataset-versions-page` rather than repeating this request.
 
         Args:
             id: ESS-DIVE dataset identifier or DOI
@@ -3436,7 +3505,11 @@ def main():
 
     @server.tool(
         name="next-dataset-versions-page",
-        description="Show the next page of the most recent dataset-version history request",
+        description=(
+            "Show the next page of the most recent dataset-version history "
+            "request in this MCP session. Use this for more, next page, or "
+            "continue requests after get-dataset-versions."
+        ),
     )
     async def next_dataset_versions_page(format: Optional[str] = None, ctx: Context = None) -> str:
         """
@@ -3481,7 +3554,11 @@ def main():
 
     @server.tool(
         name="previous-dataset-versions-page",
-        description="Show the previous page of the most recent dataset-version history request",
+        description=(
+            "Show the previous page of the most recent dataset-version history "
+            "request in this MCP session. Use this when the user asks to go "
+            "back or show earlier version-history results."
+        ),
     )
     async def previous_dataset_versions_page(format: Optional[str] = None, ctx: Context = None) -> str:
         """

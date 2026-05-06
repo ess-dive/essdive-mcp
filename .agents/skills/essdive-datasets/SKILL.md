@@ -102,13 +102,15 @@ Then use the returned `nextCursor` or `previousCursor`:
 search-datasets with query="BIONTE" and sort="name:asc" and cursor="PASTE_NEXT_OR_PREVIOUS_CURSOR_HERE"
 ```
 
-For conversational pagination, prefer the stateful MCP wrapper instead of exposing cursors:
+For conversational pagination, prefer the stateful MCP wrapper instead of exposing
+cursors. If the user asks "more", "next page", "continue", or similar after a
+`search-datasets` call, call this tool instead of repeating the search:
 
 ```
 next-search-page
 ```
 
-Or go back:
+If the user asks to go back to earlier results, call:
 
 ```
 previous-search-page
@@ -222,7 +224,9 @@ Follow a version-history cursor:
 get-dataset-versions with id="doi:10.15485/2529445" and cursor="PASTE_NEXT_OR_PREVIOUS_CURSOR_HERE"
 ```
 
-For conversational pagination through version history, prefer the stateful MCP wrappers:
+For conversational pagination through version history, prefer the stateful MCP
+wrappers. If the user asks for more versions, the next page, or to continue
+after `get-dataset-versions`, call:
 
 ```
 next-dataset-versions-page
@@ -277,11 +281,13 @@ coords-to-map-links with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
 - `cursor` is the preferred way to page through search results. `row_start` is still supported for compatibility but is legacy.
 - Search and version responses include an integer `total` plus `nextCursor` and `previousCursor` when pagination is available.
 - `next-search-page` and `previous-search-page` page through the most recent `search-datasets` request without requiring the caller to pass cursors.
+- When a user says "more", "next", "continue", "show more results", or "previous" after a dataset search, assume they are referring to the active search result set and use `next-search-page` or `previous-search-page` instead of re-running `search-datasets`.
 - For cursor follow-up searches, omit `cursor` on the first request, then pass the returned `nextCursor` or `previousCursor` value unchanged on later requests. Reuse the same search filters and omit `page_size` unless you know it matches the cursor's encoded page size.
 - For a conversational “show me the next page” flow, prefer the stateful next/previous page tools. Use raw mode only when you explicitly need to inspect or persist the API cursor values.
 - `sort` accepts comma-separated `field:direction` clauses. Supported fields: `name`, `dateUploaded`, `authorLastName`. Supported directions: `asc`, `desc`.
 - `get-dataset-versions` lists visible versions from newest to oldest and supports cursor pagination.
 - `next-dataset-versions-page` and `previous-dataset-versions-page` page through the most recent `get-dataset-versions` request without requiring the caller to pass cursors.
+- When a user asks for more or previous version-history results after `get-dataset-versions`, use `next-dataset-versions-page` or `previous-dataset-versions-page` instead of repeating `get-dataset-versions`.
 - For `get-dataset-versions`, omit `page_size` on cursor follow-up calls unless you know it matches the cursor's encoded page size. As with search, pass returned cursor values unchanged.
 - `bbox` uses `[min_lat, min_lon, max_lat, max_lon]` ordering and can also be passed as a comma-delimited string.
 - Point search requires `lat`, `lon`, and `radius` together. Do not combine point search with `bbox`.

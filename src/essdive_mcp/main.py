@@ -34,6 +34,10 @@ MCP Tools Available:
   - parse-flmd-file: Parse File Level Metadata (FLMD) CSV files to extract filename and
     description mappings for dataset files.
 
+**Export Helpers:**
+  - generate-data-citation: Generate a consistent ESS-DIVE data citation with
+    repository and MCP/API access details for a dataset ID or provided metadata.
+
 **Project References:**
   - lookup-project-portal: Look up ESS-DIVE-related project names, acronyms, descriptions,
     and portal URLs from a shared local reference file.
@@ -64,6 +68,7 @@ import logging
 import traceback
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 from threading import RLock
@@ -1212,6 +1217,172 @@ def sanitize_tsv_field(value) -> str:
     # Collapse multiple whitespace to a single space
     value = re.sub(r"\s+", " ", value)
     return value.strip()
+
+
+def _citation_person_name(person: Any) -> Optional[str]:
+    """Return an ESS-DIVE citation-formatted person name."""
+    if not isinstance(person, dict):
+        text = sanitize_tsv_field(person)
+        return text or None
+
+    family_name = sanitize_tsv_field(person.get("familyName"))
+    given_name = sanitize_tsv_field(person.get("givenName"))
+    if family_name and given_name:
+        initials = " ".join(
+            token[0].upper() for token in re.findall(r"[A-Za-z0-9]+", given_name)
+        )
+        return f"{family_name} {initials}".strip()
+
+    name = sanitize_tsv_field(person.get("name"))
+    if name:
+        return name
+
+    display_name = _person_display_name(person)
+    return display_name or None
+
+
+def _citation_provider_name(provider: Any) -> Optional[str]:
+    """Return the first usable project/provider organization name."""
+    for item in _as_list(provider):
+        if isinstance(item, dict):
+            name = sanitize_tsv_field(item.get("name"))
+            if name:
+                return name
+            label = ", ".join(_organization_search_strings(item))
+            if label:
+                return label
+            continue
+
+        text = sanitize_tsv_field(item)
+        if text:
+            return text
+    return None
+
+
+def _citation_publication_year(dataset: Dict[str, Any], package: Dict[str, Any]) -> str:
+    """Return the publication year for citation output."""
+    for value in (
+        dataset.get("datePublished"),
+        package.get("dateUploaded"),
+        package.get("dateModified"),
+    ):
+        text = sanitize_tsv_field(value)
+        match = re.search(r"\d{4}", text)
+        if match:
+            return match.group(0)
+    return "n.d."
+
+
+def _citation_doi(dataset: Dict[str, Any], package: Dict[str, Any]) -> Optional[str]:
+    """Return a normalized DOI from dataset or package metadata."""
+    for value in (
+        dataset.get("@id"),
+        dataset.get("doi"),
+        package.get("doi"),
+        package.get("@id"),
+    ):
+        text = sanitize_tsv_field(value)
+        if not text:
+            continue
+        doi_prefixes = (
+            "doi:",
+            "10.",
+            "https://doi.org/",
+            "http://doi.org/",
+            "doi.org/",
+        )
+        if text.startswith(doi_prefixes):
+            return _normalize_doi(text)
+    return None
+
+
+def _validate_access_date(access_date: Optional[str]) -> str:
+    """Return an ISO access date, defaulting to the server's current date."""
+    if access_date is None:
+        return date.today().isoformat()
+
+    value = sanitize_tsv_field(access_date)
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        raise ValueError("access_date must use YYYY-MM-DD format.")
+    return value
+
+
+def _ensure_repository_clause(citation: str) -> str:
+    """Add the ESS-DIVE repository clause to an existing ESS-DIVE citation."""
+    if "ESS-DIVE repository" in citation:
+        return citation.rstrip(".")
+    return re.sub(
+        r"\.\s+Dataset\.\s+(doi:10\.)",
+        r", ESS-DIVE repository. Dataset. \1",
+        citation.rstrip("."),
+        count=1,
+    )
+
+
+def generate_essdive_data_citation(
+    metadata: Dict[str, Any],
+    *,
+    access_date: Optional[str] = None,
+    access_method: str = "ESS-DIVE API over ESS-DIVE MCP",
+) -> str:
+    """Generate a consistent ESS-DIVE data citation from package metadata."""
+    if not isinstance(metadata, dict):
+        raise ValueError("metadata must be a dictionary.")
+
+    dataset = metadata.get("dataset")
+    if not isinstance(dataset, dict):
+        dataset = metadata
+
+    access_date_value = _validate_access_date(access_date)
+    access_method_value = sanitize_tsv_field(access_method)
+    if not access_method_value:
+        raise ValueError("access_method must not be blank.")
+
+    creators = [
+        name
+        for name in (
+            _citation_person_name(person)
+            for person in _as_list(dataset.get("creator"))
+        )
+        if name
+    ]
+    title = sanitize_tsv_field(dataset.get("name"))
+    doi = _citation_doi(dataset, metadata)
+
+    if creators and title and doi:
+        year = _citation_publication_year(dataset, metadata)
+        provider_name = _citation_provider_name(dataset.get("provider"))
+        if not provider_name:
+            provider_name = _citation_provider_name(dataset.get("publisher"))
+        repository_clause = "ESS-DIVE repository"
+        if provider_name:
+            repository_clause = f"{provider_name}, {repository_clause}"
+
+        return (
+            f"{' ; '.join(creators)} ({year}): {title}. "
+            f"{repository_clause}. Dataset. {doi} "
+            f"accessed via {access_method_value} on {access_date_value}"
+        )
+
+    existing_citation = sanitize_tsv_field(metadata.get("citation"))
+    if existing_citation:
+        base_citation = _ensure_repository_clause(existing_citation)
+        return (
+            f"{base_citation} accessed via {access_method_value} "
+            f"on {access_date_value}"
+        )
+
+    missing = []
+    if not creators:
+        missing.append("dataset.creator")
+    if not title:
+        missing.append("dataset.name")
+    if not doi:
+        missing.append("dataset.@id or dataset.doi")
+    raise ValueError(
+        "Dataset metadata is missing fields required for a data citation: "
+        + ", ".join(missing)
+    )
 
 
 def _norm_header_key(h: str) -> str:
@@ -2820,6 +2991,70 @@ def main():
                 exc,
                 verbose=verbose_mode,
                 context=_context_without_none({"id": id, "format": format}),
+            )
+
+    @server.tool(
+        name="generate-data-citation",
+        description="Generate a consistent ESS-DIVE data citation with MCP/API access details",
+    )
+    async def generate_data_citation(
+        id: Optional[str] = None,
+        dataset_metadata: Optional[Dict[str, Any]] = None,
+        access_date: Optional[str] = None,
+        access_method: str = "ESS-DIVE API over ESS-DIVE MCP",
+    ) -> str:
+        """
+        Generate a consistent ESS-DIVE data citation.
+
+        Provide either an ESS-DIVE dataset identifier/DOI in `id` or a package
+        metadata object such as the raw output from `get-dataset`. When `id` is
+        provided, this tool fetches current metadata from the ESS-DIVE API.
+
+        Args:
+            id: ESS-DIVE dataset identifier or DOI to fetch before formatting
+            dataset_metadata: Raw package metadata to format without fetching
+            access_date: Optional access date in YYYY-MM-DD format; defaults to today
+            access_method: Access phrase after "accessed via"; defaults to MCP/API usage
+
+        Examples:
+            generate-data-citation with id="doi:10.15485/3014404"
+            generate-data-citation with id="doi:10.15485/3014404" and access_date="2026-05-06"
+
+        Returns:
+            A formatted ESS-DIVE data citation string
+        """
+        LOGGER.debug(
+            "Tool generate-data-citation called id=%s metadata_provided=%s access_date=%s",
+            id,
+            dataset_metadata is not None,
+            access_date,
+        )
+        try:
+            if dataset_metadata is not None:
+                metadata = dataset_metadata
+            elif id:
+                metadata = await client.get_dataset(id)
+            else:
+                raise ValueError("Provide either id or dataset_metadata.")
+
+            return generate_essdive_data_citation(
+                metadata,
+                access_date=access_date,
+                access_method=access_method,
+            )
+        except Exception as exc:
+            return _tool_error_response(
+                "generate-data-citation",
+                exc,
+                verbose=verbose_mode,
+                context=_context_without_none(
+                    {
+                        "id": id,
+                        "dataset_metadata_provided": dataset_metadata is not None,
+                        "access_date": access_date,
+                        "access_method": access_method,
+                    }
+                ),
             )
 
     @server.tool(

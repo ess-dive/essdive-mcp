@@ -25,6 +25,7 @@ from essdive_mcp.main import (
     _build_arg_parser,
     _resolve_runtime_config,
     PaginationStateStore,
+    generate_essdive_data_citation,
 )
 import pytest
 import os
@@ -1793,6 +1794,89 @@ class TestFormatResults:
         ) in formatted
         assert "Newer Version URL" in formatted
         assert "Older Version URL" in formatted
+
+
+class TestDataCitation:
+    """Tests for ESS-DIVE data citation formatting."""
+
+    def test_generate_essdive_data_citation_from_package_metadata(self):
+        """Structured metadata should produce the expected ESS-DIVE data citation."""
+        metadata = {
+            "id": "ess-dive-c867baa5f602eed-20260506T011608834",
+            "dataset": {
+                "@id": "doi:10.15485/3014404",
+                "name": "CHESS 2025: Field-collected vegetation attributes and site photos",
+                "datePublished": "2026-03-10",
+                "creator": [
+                    {"givenName": "Ian", "familyName": "Breckheimer"},
+                    {"givenName": "Erin", "familyName": "Carroll"},
+                    {"givenName": "K. Dana", "familyName": "Chadwick"},
+                    {"givenName": "Dylan", "familyName": "O'Ryan"},
+                    {"givenName": "H. Marshall", "familyName": "Worsham"},
+                ],
+                "provider": {"name": "Watershed Function SFA"},
+            },
+        }
+
+        citation = generate_essdive_data_citation(
+            metadata, access_date="2026-05-06")
+
+        assert citation == (
+            "Breckheimer I ; Carroll E ; Chadwick K D ; O'Ryan D ; "
+            "Worsham H M (2026): CHESS 2025: Field-collected vegetation "
+            "attributes and site photos. Watershed Function SFA, ESS-DIVE "
+            "repository. Dataset. doi:10.15485/3014404 accessed via "
+            "ESS-DIVE API over ESS-DIVE MCP on 2026-05-06"
+        )
+
+    def test_generate_essdive_data_citation_accepts_dataset_only_metadata(self):
+        """Callers may pass the nested dataset object directly."""
+        citation = generate_essdive_data_citation(
+            {
+                "@id": "https://doi.org/10.15485/example",
+                "name": "Example dataset",
+                "datePublished": "2025",
+                "creator": {"givenName": "Ada", "familyName": "Lovelace"},
+            },
+            access_date="2026-05-06",
+            access_method="unit test",
+        )
+
+        assert citation == (
+            "Lovelace A (2025): Example dataset. ESS-DIVE repository. "
+            "Dataset. doi:10.15485/example accessed via unit test on 2026-05-06"
+        )
+
+    def test_generate_essdive_data_citation_falls_back_to_existing_citation(self):
+        """Existing ESS-DIVE citations should be augmented with repository/access text."""
+        citation = generate_essdive_data_citation(
+            {
+                "citation": (
+                    "Breckheimer I; Carroll E (2026): Example dataset. "
+                    "Watershed Function SFA. Dataset. doi:10.15485/3014404"
+                )
+            },
+            access_date="2026-05-06",
+        )
+
+        assert citation == (
+            "Breckheimer I; Carroll E (2026): Example dataset. "
+            "Watershed Function SFA, ESS-DIVE repository. Dataset. "
+            "doi:10.15485/3014404 accessed via ESS-DIVE API over ESS-DIVE MCP "
+            "on 2026-05-06"
+        )
+
+    def test_generate_essdive_data_citation_rejects_bad_access_date(self):
+        """Access dates should use ISO date format for consistent exports."""
+        with pytest.raises(ValueError, match="YYYY-MM-DD"):
+            generate_essdive_data_citation(
+                {
+                    "@id": "doi:10.15485/example",
+                    "name": "Example dataset",
+                    "creator": {"givenName": "Ada", "familyName": "Lovelace"},
+                },
+                access_date="05/06/2026",
+            )
 
 
 class TestNormalizeDoi:

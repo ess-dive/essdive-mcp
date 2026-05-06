@@ -25,6 +25,13 @@ from essdive_mcp.main import (
     _build_arg_parser,
     _resolve_runtime_config,
     PaginationStateStore,
+    generate_essdive_data_citation,
+    generate_crossref_data_citation,
+    generate_data_citation_for_identifier,
+    generate_data_citation_for_metadata,
+    _format_citation_output,
+    _fetch_crossref_work,
+    _looks_like_doi_identifier,
 )
 import pytest
 import os
@@ -1795,12 +1802,345 @@ class TestFormatResults:
         assert "Older Version URL" in formatted
 
 
+class TestDataCitation:
+    """Tests for ESS-DIVE data citation formatting."""
+
+    def test_generate_essdive_data_citation_from_package_metadata(self):
+        """Structured metadata should produce the expected ESS-DIVE data citation."""
+        metadata = {
+            "id": "ess-dive-c867baa5f602eed-20260506T011608834",
+            "dataset": {
+                "@id": "doi:10.15485/3014404",
+                "name": "CHESS 2025: Field-collected vegetation attributes and site photos",
+                "datePublished": "2026-03-10",
+                "creator": [
+                    {"givenName": "Ian", "familyName": "Breckheimer"},
+                    {"givenName": "Erin", "familyName": "Carroll"},
+                    {"givenName": "K. Dana", "familyName": "Chadwick"},
+                    {"givenName": "Dylan", "familyName": "O'Ryan"},
+                    {"givenName": "H. Marshall", "familyName": "Worsham"},
+                ],
+                "provider": {"name": "Watershed Function SFA"},
+            },
+        }
+
+        citation = generate_essdive_data_citation(
+            metadata, access_date="2026-05-06")
+
+        assert citation == (
+            "Breckheimer I ; Carroll E ; Chadwick K D ; O'Ryan D ; "
+            "Worsham H M (2026): CHESS 2025: Field-collected vegetation "
+            "attributes and site photos. Watershed Function SFA, ESS-DIVE "
+            "repository. Dataset. doi:10.15485/3014404 accessed via "
+            "ESS-DIVE API over ESS-DIVE MCP on 2026-05-06"
+        )
+
+    def test_generate_essdive_data_citation_accepts_dataset_only_metadata(self):
+        """Callers may pass the nested dataset object directly."""
+        citation = generate_essdive_data_citation(
+            {
+                "@id": "https://doi.org/10.15485/example",
+                "name": "Example dataset",
+                "datePublished": "2025",
+                "creator": {"givenName": "Ada", "familyName": "Lovelace"},
+            },
+            access_date="2026-05-06",
+            access_method="unit test",
+        )
+
+        assert citation == (
+            "Lovelace A (2025): Example dataset. ESS-DIVE repository. "
+            "Dataset. doi:10.15485/example accessed via unit test on 2026-05-06"
+        )
+
+    def test_generate_essdive_data_citation_falls_back_to_existing_citation(self):
+        """Existing ESS-DIVE citations should be augmented with repository/access text."""
+        citation = generate_essdive_data_citation(
+            {
+                "citation": (
+                    "Breckheimer I; Carroll E (2026): Example dataset. "
+                    "Watershed Function SFA. Dataset. doi:10.15485/3014404"
+                )
+            },
+            access_date="2026-05-06",
+        )
+
+        assert citation == (
+            "Breckheimer I; Carroll E (2026): Example dataset. "
+            "Watershed Function SFA, ESS-DIVE repository. Dataset. "
+            "doi:10.15485/3014404 accessed via ESS-DIVE API over ESS-DIVE MCP "
+            "on 2026-05-06"
+        )
+
+    def test_generate_essdive_data_citation_rejects_bad_access_date(self):
+        """Access dates should use ISO date format for consistent exports."""
+        with pytest.raises(ValueError, match="YYYY-MM-DD"):
+            generate_essdive_data_citation(
+                {
+                    "@id": "doi:10.15485/example",
+                    "name": "Example dataset",
+                    "creator": {"givenName": "Ada", "familyName": "Lovelace"},
+                },
+                access_date="05/06/2026",
+            )
+
+    @pytest.mark.parametrize(
+        ("identifier", "expected"),
+        [
+            ("doi:10.1038/nature12373", True),
+            ("DOI:10.1038/nature12373", True),
+            ("10.1038/nature12373", True),
+            ("https://doi.org/10.1038/nature12373", True),
+            ("ess-dive-abc123", False),
+            ("doi:not-a-real-doi", False),
+        ],
+    )
+    def test_looks_like_doi_identifier(self, identifier, expected):
+        """DOI fallback should only run for recognizable DOI-shaped values."""
+        assert _looks_like_doi_identifier(identifier) is expected
+
+    def test_generate_crossref_data_citation(self):
+        """Crossref metadata should format into a citation-like reference."""
+        citation = generate_crossref_data_citation(
+            {
+                "DOI": "10.1038/nature12373",
+                "type": "journal-article",
+                "title": ["Nanometre-scale thermometry in a living cell"],
+                "container-title": ["Nature"],
+                "issued": {"date-parts": [[2013, 8]]},
+                "author": [
+                    {"given": "G.", "family": "Kucsko"},
+                    {"given": "P. C.", "family": "Maurer"},
+                ],
+            },
+            access_date="2026-05-06",
+        )
+
+        assert citation == (
+            "Kucsko G ; Maurer P C (2013): Nanometre-scale thermometry "
+            "in a living cell. Nature. Journal article. doi:10.1038/nature12373 "
+            "accessed via Crossref API over ESS-DIVE MCP on 2026-05-06"
+        )
+
+    def test_format_citation_output_surfaces_warnings(self):
+        """Warnings should be visible before citation text for agents."""
+        output = _format_citation_output(
+            "Example citation",
+            ["doi:10.1038/example is not an ESS-DIVE DOI."],
+        )
+
+        assert output == (
+            "WARNING: doi:10.1038/example is not an ESS-DIVE DOI.\n\n"
+            "Example citation"
+        )
+
+    def test_fetch_crossref_work_success(self):
+        """Crossref fetch should return the work metadata message."""
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = {"message": {"DOI": "10.1038/example"}}
+
+        with patch("essdive_mcp.main.requests.get", return_value=response) as get:
+            result = _fetch_crossref_work("doi:10.1038/example")
+
+        assert result == {"DOI": "10.1038/example"}
+        assert get.call_args.args[0].endswith("/10.1038%2Fexample")
+
+    def test_fetch_crossref_work_http_error(self):
+        """Crossref HTTP misses should raise a clear error."""
+        response = Mock()
+        response.status_code = 404
+
+        with patch("essdive_mcp.main.requests.get", return_value=response):
+            with pytest.raises(ValueError, match="HTTP 404"):
+                _fetch_crossref_work("doi:10.1038/missing")
+
+    def test_fetch_crossref_work_invalid_json(self):
+        """Invalid Crossref JSON should raise a clear error."""
+        response = Mock()
+        response.status_code = 200
+        response.json.side_effect = ValueError("bad json")
+
+        with patch("essdive_mcp.main.requests.get", return_value=response):
+            with pytest.raises(ValueError, match="invalid JSON"):
+                _fetch_crossref_work("doi:10.1038/example")
+
+    def test_fetch_crossref_work_request_error(self):
+        """Crossref request failures should raise a clear error."""
+        with patch(
+            "essdive_mcp.main.requests.get",
+            side_effect=requests.RequestException("network"),
+        ):
+            with pytest.raises(ValueError, match="request failed"):
+                _fetch_crossref_work("doi:10.1038/example")
+
+    @pytest.mark.asyncio
+    async def test_generate_data_citation_for_non_essdive_doi_warns(self):
+        """Non-ESS-DIVE DOIs should use Crossref and warn the caller."""
+        client = Mock()
+        client.get_dataset = AsyncMock()
+        crossref_message = {
+            "DOI": "10.1038/nature12373",
+            "type": "journal-article",
+            "title": ["Nanometre-scale thermometry in a living cell"],
+            "container-title": ["Nature"],
+            "issued": {"date-parts": [[2013]]},
+            "author": [{"given": "G.", "family": "Kucsko"}],
+        }
+
+        with patch(
+            "essdive_mcp.main._fetch_crossref_work",
+            return_value=crossref_message,
+        ) as fetch_crossref:
+            citation, warnings = await generate_data_citation_for_identifier(
+                client,
+                "doi:10.1038/nature12373",
+                access_date="2026-05-06",
+            )
+
+        client.get_dataset.assert_not_called()
+        fetch_crossref.assert_called_once_with("doi:10.1038/nature12373")
+        assert warnings == [
+            "doi:10.1038/nature12373 is not an ESS-DIVE DOI; citation was "
+            "generated from Crossref metadata and may not describe an "
+            "ESS-DIVE dataset."
+        ]
+        assert citation.endswith(
+            "doi:10.1038/nature12373 accessed via Crossref API over "
+            "ESS-DIVE MCP on 2026-05-06"
+        )
+
+    @pytest.mark.asyncio
+    async def test_generate_data_citation_for_metadata_keeps_essdive_source(self):
+        """ESS-DIVE metadata should keep ESS-DIVE repository citation formatting."""
+        citation, warnings = await generate_data_citation_for_metadata(
+            {
+                "dataset": {
+                    "@id": "doi:10.15485/example",
+                    "name": "Example dataset",
+                    "datePublished": "2025",
+                    "creator": {"givenName": "Ada", "familyName": "Lovelace"},
+                }
+            },
+            access_date="2026-05-06",
+        )
+
+        assert warnings == []
+        assert citation == (
+            "Lovelace A (2025): Example dataset. ESS-DIVE repository. "
+            "Dataset. doi:10.15485/example accessed via ESS-DIVE API over "
+            "ESS-DIVE MCP on 2026-05-06"
+        )
+
+    @pytest.mark.asyncio
+    async def test_generate_data_citation_for_metadata_warns_for_non_essdive_doi(self):
+        """Provided non-ESS-DIVE metadata should not be labeled as ESS-DIVE."""
+        crossref_message = {
+            "DOI": "10.1038/nature12373",
+            "type": "journal-article",
+            "title": ["Nanometre-scale thermometry in a living cell"],
+            "container-title": ["Nature"],
+            "issued": {"date-parts": [[2013]]},
+            "author": [{"given": "G.", "family": "Kucsko"}],
+        }
+
+        with patch(
+            "essdive_mcp.main._fetch_crossref_work",
+            return_value=crossref_message,
+        ) as fetch_crossref:
+            citation, warnings = await generate_data_citation_for_metadata(
+                {
+                    "@id": "doi:10.1038/nature12373",
+                    "name": "Nanometre-scale thermometry in a living cell",
+                    "datePublished": "2013",
+                    "creator": {"givenName": "G.", "familyName": "Kucsko"},
+                },
+                access_date="2026-05-06",
+            )
+
+        fetch_crossref.assert_called_once_with("doi:10.1038/nature12373")
+        assert warnings == [
+            "doi:10.1038/nature12373 is not an ESS-DIVE DOI; provided "
+            "metadata was not treated as ESS-DIVE metadata."
+        ]
+        assert "ESS-DIVE repository" not in citation
+        assert citation == (
+            "Kucsko G (2013): Nanometre-scale thermometry in a living cell. "
+            "Nature. Journal article. doi:10.1038/nature12373 accessed via "
+            "Crossref API over ESS-DIVE MCP on 2026-05-06"
+        )
+
+    @pytest.mark.asyncio
+    async def test_generate_data_citation_for_crossref_metadata_uses_provided_message(self):
+        """Crossref-shaped metadata should warn and avoid an extra fetch."""
+        citation, warnings = await generate_data_citation_for_metadata(
+            {
+                "DOI": "10.1038/nature12373",
+                "type": "journal-article",
+                "title": ["Nanometre-scale thermometry in a living cell"],
+                "container-title": ["Nature"],
+                "issued": {"date-parts": [[2013]]},
+                "author": [{"given": "G.", "family": "Kucsko"}],
+            },
+            access_date="2026-05-06",
+        )
+
+        assert warnings == [
+            "doi:10.1038/nature12373 is not an ESS-DIVE DOI; provided "
+            "metadata was not treated as ESS-DIVE metadata."
+        ]
+        assert citation.startswith("Kucsko G (2013):")
+        assert "Crossref API over ESS-DIVE MCP" in citation
+
+    @pytest.mark.asyncio
+    async def test_generate_data_citation_for_missing_essdive_doi_tries_crossref(self):
+        """DOI-shaped ESS-DIVE misses should try Crossref before failing."""
+        client = Mock()
+        client.get_dataset = AsyncMock(side_effect=ValueError("not found"))
+        crossref_message = {
+            "DOI": "10.15485/does-exist-elsewhere",
+            "type": "dataset",
+            "title": ["Archived dataset"],
+            "publisher": "Example Repository",
+            "issued": {"date-parts": [[2024]]},
+            "author": [{"given": "Ada", "family": "Lovelace"}],
+        }
+
+        with patch(
+            "essdive_mcp.main._fetch_crossref_work",
+            return_value=crossref_message,
+        ) as fetch_crossref:
+            citation, warnings = await generate_data_citation_for_identifier(
+                client,
+                "doi:10.15485/does-exist-elsewhere",
+                access_date="2026-05-06",
+            )
+
+        client.get_dataset.assert_awaited_once()
+        fetch_crossref.assert_called_once_with("doi:10.15485/does-exist-elsewhere")
+        assert warnings == [
+            "doi:10.15485/does-exist-elsewhere could not be retrieved from "
+            "ESS-DIVE; citation was generated from Crossref metadata and may "
+            "not describe an ESS-DIVE dataset."
+        ]
+        assert citation == (
+            "Lovelace A (2024): Archived dataset. Example Repository. Dataset. "
+            "doi:10.15485/does-exist-elsewhere accessed via Crossref API over "
+            "ESS-DIVE MCP on 2026-05-06"
+        )
+
+
 class TestNormalizeDoi:
     """Tests for the _normalize_doi helper function."""
 
     def test_normalize_doi_with_doi_prefix(self):
         """Test normalizing a DOI that already has the doi: prefix."""
         result = _normalize_doi("doi:10.1234/example")
+        assert result == "doi:10.1234/example"
+
+    def test_normalize_doi_with_uppercase_doi_prefix(self):
+        """Test normalizing a DOI with uppercase DOI prefix."""
+        result = _normalize_doi("DOI:10.1234/example")
         assert result == "doi:10.1234/example"
 
     def test_normalize_doi_without_prefix(self):

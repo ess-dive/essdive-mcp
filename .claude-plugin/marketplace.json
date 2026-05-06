@@ -5,8 +5,8 @@
     "email": "jhc@lbl.gov"
   },
   "metadata": {
-    "description": "Skills for ESS-DIVE dataset search, identifier conversion, and ESS-DeepDive queries",
-    "version": "0.2.4"
+    "description": "Skills for ESS-DIVE dataset search, citation generation, identifier conversion, and ESS-DeepDive queries",
+    "version": "0.2.5"
   },
   "plugins": [
     {
@@ -16,6 +16,15 @@
       "strict": false,
       "skills": [
         "../.agents/skills/essdive-datasets"
+      ]
+    },
+    {
+      "name": "essdive-data-citations",
+      "description": "Generate consistent ESS-DIVE data citations",
+      "source": "./",
+      "strict": false,
+      "skills": [
+        "../.agents/skills/essdive-data-citations"
       ]
     },
     {

@@ -175,6 +175,7 @@ This project gives an AI client a set of tools for:
 - searching public ESS-DIVE datasets
 - fetching dataset metadata, version history, and sharing permissions
 - converting between ESS-DIVE dataset IDs and DOIs
+- generating consistent ESS-DIVE data citations with MCP/API access details, plus warning-backed Crossref fallback for non-ESS-DIVE DOIs
 - parsing File Level Metadata (FLMD) CSV content
 - searching ESS-DeepDive field and file metadata
 - looking up ESS-DIVE project acronyms, descriptions, and portal URLs
@@ -740,6 +741,9 @@ search-datasets with query="East River" and variable_measured="streamflow" and p
 search-datasets with query="East River" and funder="NASA" and page_size=5
 get-dataset with id="ess-dive-165671432ae620e-20250908T210722395"
 get-dataset with id="doi:10.15485/2529445" and format="raw"
+generate-data-citation with id="doi:10.15485/3014404"
+generate-data-citation with id="doi:10.15485/3014404" and access_date="2026-05-06"
+generate-data-citation with id="doi:10.1038/nature12373" and access_date="2026-05-06"
 get-dataset-versions with id="doi:10.15485/2529445" and page_size=2
 get-dataset-versions with id="doi:10.15485/2529445" and cursor="PASTE_NEXT_CURSOR_HERE"
 next-dataset-versions-page
@@ -757,6 +761,7 @@ coords-to-map-links with points=[[38.9219, -106.9490]] and zoom=12
 Skills are optional. They are useful when you want an agent to consistently recognize a recurring task pattern, such as:
 
 - dataset discovery and metadata follow-up
+- data citation generation
 - DOI and ESS-DIVE ID conversion
 - ESS-DeepDive field and file exploration
 
@@ -769,10 +774,11 @@ What is a Skill?
 
 You can also use the Skills without installing this MCP server. In that case, they still provide task-specific instructions and prompt patterns, and some of them include fallback API examples. You just will not get the full MCP tool integration.
 
-This repository includes three Skills described in [docs/SKILLS.md](docs/SKILLS.md):
+This repository includes four Skills described in [docs/SKILLS.md](docs/SKILLS.md):
 
 - `essdive-datasets`
 - `essdive-identifiers`
+- `essdive-data-citations`
 - `essdeepdive`
 
 ### Quick Start for Skills in Goose Desktop
@@ -804,6 +810,7 @@ For the easiest install, copy this repository's Skill tree into one of Goose's s
 .agents/skills/
   essdive-datasets/SKILL.md
   essdive-identifiers/SKILL.md
+  essdive-data-citations/SKILL.md
   essdeepdive/SKILL.md
   references/essdive_project_portals.yaml
 ```
@@ -817,6 +824,7 @@ If you prefer to create the files manually, create these directories and then co
 
 - [SKILL.md](/home/harry/essdive-mcp/.agents/skills/essdive-datasets/SKILL.md)
 - [SKILL.md](/home/harry/essdive-mcp/.agents/skills/essdive-identifiers/SKILL.md)
+- [SKILL.md](/home/harry/essdive-mcp/.agents/skills/essdive-data-citations/SKILL.md)
 - [SKILL.md](/home/harry/essdive-mcp/.agents/skills/essdeepdive/SKILL.md)
 - [essdive_project_portals.yaml](/home/harry/essdive-mcp/.agents/skills/references/essdive_project_portals.yaml)
 
@@ -867,6 +875,7 @@ Examples:
 - `Use the essdive-datasets skill to search for BIONTE datasets and then show me the next page without exposing the cursor values.`
 - `Use the essdive-datasets skill to list the version history for DOI 10.15485/2529445 and summarize the newest two versions.`
 - `Use the essdive-identifiers skill to normalize DOI https://doi.org/10.15485/2587853 and return the ESS-DIVE ID.`
+- `Use the essdive-data-citations skill to generate a citation for DOI 10.15485/3014404 with access date 2026-05-06.`
 - `Use the essdeepdive skill to search for temperature fields and tell me which data file each result comes from.`
 
 ### Skill result examples
@@ -923,6 +932,7 @@ and the observed values range from 19.1 to 26.9 C.
 - `next-search-page`
 - `previous-search-page`
 - `get-dataset`
+- `generate-data-citation`
 - `get-dataset-versions`
 - `next-dataset-versions-page`
 - `previous-dataset-versions-page`

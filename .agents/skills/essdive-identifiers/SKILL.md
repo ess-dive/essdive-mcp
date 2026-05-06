@@ -1,6 +1,6 @@
 ---
 name: essdive-identifiers
-description: Convert between ESS-DIVE dataset IDs and DOIs via MCP tools.
+description: Convert between ESS-DIVE dataset IDs and DOIs, and generate ESS-DIVE data citations from either identifier via MCP tools.
 ---
 
 # Setup (once)
@@ -36,6 +36,7 @@ claude mcp add --transport stdio essdive-mcp -- uv run python ./src/essdive_mcp/
 
 - `doi-to-essdive-id`
 - `essdive-id-to-doi`
+- `generate-data-citation`
 - `lookup-project-portal`
 - `coords-to-map-links`
 
@@ -51,6 +52,12 @@ Convert an ESS-DIVE ID to a DOI:
 
 ```
 essdive-id-to-doi with essdive_id="ess-dive-9ea5fe57db73c90-20241024T093714082510"
+```
+
+Generate a data citation directly from a DOI or ESS-DIVE ID:
+
+```
+generate-data-citation with id="doi:10.15485/3014404" and access_date="2026-05-06"
 ```
 
 Look up a project acronym and its portal details:
@@ -69,6 +76,9 @@ coords-to-map-links with points=[[38.9219, -106.9490]] and zoom=12
 
 - DOI inputs can include prefixes or URLs (e.g., `doi:10.15485/...` or `https://doi.org/...`).
 - Outputs return a normalized DOI format.
+- Prefer `generate-data-citation` when the user asks for a citable reference rather than just an identifier conversion.
+- `generate-data-citation` can fetch citation metadata directly from either a package ID or DOI, so do not add a separate conversion step unless the user also wants the converted identifier.
+- If `generate-data-citation` warns that a DOI is not from ESS-DIVE, preserve that warning in the final answer.
 - For portal names, acronyms, and URLs, consult `../references/essdive_project_portals.yaml`.
 
 ## Fallback (no MCP server)

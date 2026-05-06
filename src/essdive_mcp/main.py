@@ -35,8 +35,8 @@ MCP Tools Available:
     description mappings for dataset files.
 
 **Export Helpers:**
-  - generate-data-citation: Generate a consistent ESS-DIVE data citation with
-    repository and MCP/API access details for a dataset ID or provided metadata.
+  - generate-data-citation: Generate a consistent data citation with repository
+    and access details for ESS-DIVE metadata, with Crossref fallback for other DOIs.
 
 **Project References:**
   - lookup-project-portal: Look up ESS-DIVE-related project names, acronyms, descriptions,
@@ -92,6 +92,12 @@ PAGINATION_STATE_CLEANUP_INTERVAL_SECONDS = 60.0
 DEFAULT_HTTP_HOST = "127.0.0.1"
 DEFAULT_HTTP_PORT = 8000
 DEFAULT_HTTP_PATH = "/mcp"
+DEFAULT_ESSDIVE_ACCESS_METHOD = "ESS-DIVE API over ESS-DIVE MCP"
+DEFAULT_CROSSREF_ACCESS_METHOD = "Crossref API over ESS-DIVE MCP"
+CROSSREF_WORKS_URL = "https://api.crossref.org/works"
+CROSSREF_USER_AGENT = (
+    "essdive-mcp/0.3.1 (https://github.com/ess-dive/essdive-mcp)"
+)
 T = TypeVar("T")
 PROJECT_PORTALS_PATH = (
     Path(__file__).resolve().parents[2]
@@ -1219,14 +1225,31 @@ def sanitize_tsv_field(value) -> str:
     return value.strip()
 
 
+def _looks_like_doi_identifier(identifier: Optional[str]) -> bool:
+    """Return True when an identifier has a recognizable DOI shape."""
+    text = sanitize_tsv_field(identifier)
+    if not text:
+        return False
+    for prefix in ("https://doi.org/", "http://doi.org/", "doi.org/", "doi:"):
+        if text.lower().startswith(prefix):
+            text = text[len(prefix):]
+            break
+    return bool(re.fullmatch(r"10\.\S+/.+", text))
+
+
+def _is_essdive_doi(identifier: str) -> bool:
+    """Return True for normalized ESS-DIVE DOI identifiers."""
+    return _normalize_doi(identifier).startswith("doi:10.15485/")
+
+
 def _citation_person_name(person: Any) -> Optional[str]:
     """Return an ESS-DIVE citation-formatted person name."""
     if not isinstance(person, dict):
         text = sanitize_tsv_field(person)
         return text or None
 
-    family_name = sanitize_tsv_field(person.get("familyName"))
-    given_name = sanitize_tsv_field(person.get("givenName"))
+    family_name = sanitize_tsv_field(person.get("familyName") or person.get("family"))
+    given_name = sanitize_tsv_field(person.get("givenName") or person.get("given"))
     if family_name and given_name:
         initials = " ".join(
             token[0].upper() for token in re.findall(r"[A-Za-z0-9]+", given_name)
@@ -1296,6 +1319,112 @@ def _citation_doi(dataset: Dict[str, Any], package: Dict[str, Any]) -> Optional[
     return None
 
 
+def _first_text(value: Any) -> Optional[str]:
+    """Return the first nonblank text value from a string or list."""
+    for item in _as_list(value):
+        text = sanitize_tsv_field(item)
+        if text:
+            return text
+    return None
+
+
+def _crossref_publication_year(message: Dict[str, Any]) -> str:
+    """Return the best publication year available from Crossref metadata."""
+    for key in ("issued", "published-print", "published-online", "created"):
+        date_parts = message.get(key, {}).get("date-parts")
+        if not isinstance(date_parts, list) or not date_parts:
+            continue
+        first_part = date_parts[0]
+        if isinstance(first_part, list) and first_part:
+            year = sanitize_tsv_field(first_part[0])
+            if re.fullmatch(r"\d{4}", year):
+                return year
+    return "n.d."
+
+
+def _crossref_type_label(work_type: Any) -> str:
+    """Return a human-readable Crossref work type."""
+    text = sanitize_tsv_field(work_type)
+    if not text:
+        return "Reference"
+    return text.replace("-", " ").capitalize()
+
+
+def _fetch_crossref_work(doi: str) -> Dict[str, Any]:
+    """Fetch a Crossref work metadata message for a DOI."""
+    normalized_doi = _normalize_doi(doi)
+    bare_doi = normalized_doi.removeprefix("doi:")
+    try:
+        response = requests.get(
+            f"{CROSSREF_WORKS_URL}/{quote(bare_doi, safe='')}",
+            headers={"User-Agent": CROSSREF_USER_AGENT},
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+    except requests.RequestException as exc:
+        raise ValueError(
+            f"Crossref API request failed: {exc.__class__.__name__}"
+        ) from exc
+    if response.status_code != 200:
+        raise ValueError(f"Crossref API returned HTTP {response.status_code}")
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise ValueError("Crossref API returned invalid JSON") from exc
+
+    message = payload.get("message")
+    if not isinstance(message, dict):
+        raise ValueError("Crossref response did not contain work metadata")
+    return message
+
+
+def generate_crossref_data_citation(
+    message: Dict[str, Any],
+    *,
+    doi: Optional[str] = None,
+    access_date: Optional[str] = None,
+    access_method: str = DEFAULT_CROSSREF_ACCESS_METHOD,
+) -> str:
+    """Generate a citation-shaped reference from Crossref work metadata."""
+    if not isinstance(message, dict):
+        raise ValueError("Crossref metadata must be a dictionary.")
+
+    access_date_value = _validate_access_date(access_date)
+    access_method_value = sanitize_tsv_field(access_method)
+    if not access_method_value:
+        raise ValueError("access_method must not be blank.")
+
+    authors = [
+        name
+        for name in (
+            _citation_person_name(person)
+            for person in _as_list(message.get("author"))
+        )
+        if name
+    ]
+    author_text = " ; ".join(authors) if authors else "Unknown author"
+    year = _crossref_publication_year(message)
+    title = _first_text(message.get("title"))
+    if not title:
+        raise ValueError("Crossref response did not contain a title.")
+
+    source = (
+        _first_text(message.get("container-title"))
+        or sanitize_tsv_field(message.get("publisher"))
+        or "Crossref"
+    )
+    work_type = _crossref_type_label(message.get("type"))
+    raw_doi = sanitize_tsv_field(message.get("DOI")) or sanitize_tsv_field(doi)
+    if not _looks_like_doi_identifier(raw_doi):
+        raise ValueError("Crossref response did not contain a DOI.")
+    citation_doi = _normalize_doi(raw_doi)
+
+    return (
+        f"{author_text} ({year}): {title}. {source}. {work_type}. "
+        f"{citation_doi} accessed via {access_method_value} on {access_date_value}"
+    )
+
+
 def _validate_access_date(access_date: Optional[str]) -> str:
     """Return an ISO access date, defaulting to the server's current date."""
     if access_date is None:
@@ -1323,7 +1452,7 @@ def generate_essdive_data_citation(
     metadata: Dict[str, Any],
     *,
     access_date: Optional[str] = None,
-    access_method: str = "ESS-DIVE API over ESS-DIVE MCP",
+    access_method: str = DEFAULT_ESSDIVE_ACCESS_METHOD,
 ) -> str:
     """Generate a consistent ESS-DIVE data citation from package metadata."""
     if not isinstance(metadata, dict):
@@ -1383,6 +1512,96 @@ def generate_essdive_data_citation(
         "Dataset metadata is missing fields required for a data citation: "
         + ", ".join(missing)
     )
+
+
+async def generate_data_citation_for_identifier(
+    client: "ESSDiveClient",
+    identifier: str,
+    *,
+    access_date: Optional[str] = None,
+    access_method: str = DEFAULT_ESSDIVE_ACCESS_METHOD,
+) -> tuple[str, List[str]]:
+    """Generate a citation from an identifier with Crossref fallback for DOIs."""
+    warnings: List[str] = []
+    normalized_doi = (
+        _normalize_doi(identifier) if _looks_like_doi_identifier(identifier) else None
+    )
+
+    if normalized_doi and not _is_essdive_doi(normalized_doi):
+        crossref_message = await asyncio.to_thread(
+            _fetch_crossref_work, normalized_doi
+        )
+        warnings.append(
+            f"{normalized_doi} is not an ESS-DIVE DOI; citation was generated "
+            "from Crossref metadata and may not describe an ESS-DIVE dataset."
+        )
+        crossref_access_method = (
+            DEFAULT_CROSSREF_ACCESS_METHOD
+            if access_method == DEFAULT_ESSDIVE_ACCESS_METHOD
+            else access_method
+        )
+        return (
+            generate_crossref_data_citation(
+                crossref_message,
+                doi=normalized_doi,
+                access_date=access_date,
+                access_method=crossref_access_method,
+            ),
+            warnings,
+        )
+
+    try:
+        metadata = await client.get_dataset(identifier)
+        return (
+            generate_essdive_data_citation(
+                metadata,
+                access_date=access_date,
+                access_method=access_method,
+            ),
+            warnings,
+        )
+    except Exception as essdive_exc:
+        if not normalized_doi:
+            raise
+
+        try:
+            crossref_message = await asyncio.to_thread(
+                _fetch_crossref_work, normalized_doi
+            )
+        except Exception as crossref_exc:
+            raise ValueError(
+                f"Failed to retrieve citation metadata for {normalized_doi} "
+                "from ESS-DIVE or Crossref. "
+                f"ESS-DIVE error: {essdive_exc}. Crossref error: {crossref_exc}"
+            ) from crossref_exc
+
+        warnings.append(
+            f"{normalized_doi} could not be retrieved from ESS-DIVE; citation "
+            "was generated from Crossref metadata and may not describe an "
+            "ESS-DIVE dataset."
+        )
+        crossref_access_method = (
+            DEFAULT_CROSSREF_ACCESS_METHOD
+            if access_method == DEFAULT_ESSDIVE_ACCESS_METHOD
+            else access_method
+        )
+        return (
+            generate_crossref_data_citation(
+                crossref_message,
+                doi=normalized_doi,
+                access_date=access_date,
+                access_method=crossref_access_method,
+            ),
+            warnings,
+        )
+
+
+def _format_citation_output(citation: str, warnings: List[str]) -> str:
+    """Render citation output with agent-visible warning lines."""
+    if not warnings:
+        return citation
+    warning_text = "\n".join(f"WARNING: {warning}" for warning in warnings)
+    return f"{warning_text}\n\n{citation}"
 
 
 def _norm_header_key(h: str) -> str:
@@ -2320,17 +2539,20 @@ def _normalize_doi(identifier: str) -> str:
         'doi:10.15485/2453885'
     """
     identifier = identifier.strip()
+    lowered = identifier.lower()
 
     # Remove common DOI URL prefixes
-    if identifier.startswith("https://doi.org/"):
-        identifier = identifier.replace("https://doi.org/", "")
-    elif identifier.startswith("http://doi.org/"):
-        identifier = identifier.replace("http://doi.org/", "")
-    elif identifier.startswith("doi.org/"):
-        identifier = identifier.replace("doi.org/", "")
+    if lowered.startswith("https://doi.org/"):
+        identifier = identifier[len("https://doi.org/"):]
+    elif lowered.startswith("http://doi.org/"):
+        identifier = identifier[len("http://doi.org/"):]
+    elif lowered.startswith("doi.org/"):
+        identifier = identifier[len("doi.org/"):]
 
     # Add doi: prefix if not present
-    if not identifier.startswith("doi:"):
+    if identifier.lower().startswith("doi:"):
+        identifier = f"doi:{identifier[4:]}"
+    else:
         identifier = f"doi:{identifier}"
 
     return identifier
@@ -2995,20 +3217,21 @@ def main():
 
     @server.tool(
         name="generate-data-citation",
-        description="Generate a consistent ESS-DIVE data citation with MCP/API access details",
+        description="Generate a consistent data citation with MCP/API access details",
     )
     async def generate_data_citation(
         id: Optional[str] = None,
         dataset_metadata: Optional[Dict[str, Any]] = None,
         access_date: Optional[str] = None,
-        access_method: str = "ESS-DIVE API over ESS-DIVE MCP",
+        access_method: str = DEFAULT_ESSDIVE_ACCESS_METHOD,
     ) -> str:
         """
-        Generate a consistent ESS-DIVE data citation.
+        Generate a consistent data citation.
 
         Provide either an ESS-DIVE dataset identifier/DOI in `id` or a package
         metadata object such as the raw output from `get-dataset`. When `id` is
-        provided, this tool fetches current metadata from the ESS-DIVE API.
+        provided, this tool fetches current metadata from the ESS-DIVE API. If
+        `id` is a DOI outside ESS-DIVE, the tool warns and tries Crossref.
 
         Args:
             id: ESS-DIVE dataset identifier or DOI to fetch before formatting
@@ -3031,17 +3254,22 @@ def main():
         )
         try:
             if dataset_metadata is not None:
-                metadata = dataset_metadata
+                citation = generate_essdive_data_citation(
+                    dataset_metadata,
+                    access_date=access_date,
+                    access_method=access_method,
+                )
+                return _format_citation_output(citation, [])
             elif id:
-                metadata = await client.get_dataset(id)
+                citation, warnings = await generate_data_citation_for_identifier(
+                    client,
+                    id,
+                    access_date=access_date,
+                    access_method=access_method,
+                )
+                return _format_citation_output(citation, warnings)
             else:
                 raise ValueError("Provide either id or dataset_metadata.")
-
-            return generate_essdive_data_citation(
-                metadata,
-                access_date=access_date,
-                access_method=access_method,
-            )
         except Exception as exc:
             return _tool_error_response(
                 "generate-data-citation",

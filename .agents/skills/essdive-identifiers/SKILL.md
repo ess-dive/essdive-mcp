@@ -78,6 +78,7 @@ coords-to-map-links with points=[[38.9219, -106.9490]] and zoom=12
 - Outputs return a normalized DOI format.
 - Prefer `generate-data-citation` when the user asks for a citable reference rather than just an identifier conversion.
 - `generate-data-citation` can fetch citation metadata directly from either a package ID or DOI, so do not add a separate conversion step unless the user also wants the converted identifier.
+- If `generate-data-citation` warns that a DOI is not from ESS-DIVE, preserve that warning in the final answer.
 - For portal names, acronyms, and URLs, consult `../references/essdive_project_portals.yaml`.
 
 ## Fallback (no MCP server)

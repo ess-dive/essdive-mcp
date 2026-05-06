@@ -272,6 +272,7 @@ coords-to-map-links with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
 - Use `generate-data-citation` when the user asks how to cite a dataset or when an export/report should include an ESS-DIVE data citation.
 - `generate-data-citation` accepts an `id` or an already-fetched raw `dataset_metadata` object. Prefer passing `dataset_metadata` when the workflow already called `get-dataset` with `format="raw"`.
 - Pass `access_date` when citation output must be reproducible; otherwise the MCP server uses its current date.
+- If `generate-data-citation` warns that a DOI is not from ESS-DIVE, preserve that warning in the final answer.
 - `page_size` max is 100.
 - `cursor` is the preferred way to page through search results. `row_start` is still supported for compatibility but is legacy.
 - Search and version responses include an integer `total` plus `nextCursor` and `previousCursor` when pagination is available.

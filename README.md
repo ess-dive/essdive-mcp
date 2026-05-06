@@ -175,7 +175,7 @@ This project gives an AI client a set of tools for:
 - searching public ESS-DIVE datasets
 - fetching dataset metadata, version history, and sharing permissions
 - converting between ESS-DIVE dataset IDs and DOIs
-- generating consistent ESS-DIVE data citations with MCP/API access details
+- generating consistent ESS-DIVE data citations with MCP/API access details, plus warning-backed Crossref fallback for non-ESS-DIVE DOIs
 - parsing File Level Metadata (FLMD) CSV content
 - searching ESS-DeepDive field and file metadata
 - looking up ESS-DIVE project acronyms, descriptions, and portal URLs
@@ -743,6 +743,7 @@ get-dataset with id="ess-dive-165671432ae620e-20250908T210722395"
 get-dataset with id="doi:10.15485/2529445" and format="raw"
 generate-data-citation with id="doi:10.15485/3014404"
 generate-data-citation with id="doi:10.15485/3014404" and access_date="2026-05-06"
+generate-data-citation with id="doi:10.1038/nature12373" and access_date="2026-05-06"
 get-dataset-versions with id="doi:10.15485/2529445" and page_size=2
 get-dataset-versions with id="doi:10.15485/2529445" and cursor="PASTE_NEXT_CURSOR_HERE"
 next-dataset-versions-page

@@ -88,7 +88,8 @@ See [`../.agents/skills/essdive-identifiers/SKILL.md`](../.agents/skills/essdive
 
 Generate consistent ESS-DIVE data citations from dataset IDs, DOIs, or raw
 dataset metadata, including provider, ESS-DIVE repository, DOI, and MCP/API
-access details.
+access details. For non-ESS-DIVE DOIs, the Skill tells agents to preserve the
+warning and use Crossref-derived citation metadata when available.
 
 See [`../.agents/skills/essdive-data-citations/SKILL.md`](../.agents/skills/essdive-data-citations/SKILL.md).
 

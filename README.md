@@ -726,6 +726,12 @@ Example result excerpt:
 
 If your client supports direct tool calling, these examples map closely to the available tools.
 
+For conversational pagination, use the stateful next/previous page tools after
+the first search or version-history request. If a user asks for "more", "next
+page", "continue", or "previous", call `next-search-page`,
+`previous-search-page`, `next-dataset-versions-page`, or
+`previous-dataset-versions-page` instead of repeating the original request.
+
 ```text
 search-datasets with query="wildfire recovery" and page_size=5
 search-datasets with query="BIONTE" and sort="name:asc" and page_size=3
@@ -873,6 +879,7 @@ Examples:
 - `Use the essdive-datasets skill to search for BIONTE datasets, then continue to the next page with the returned cursor.`
 - `Use the essdive-datasets skill to search for BIONTE datasets, keep the pagination cursor, and show me the next page if I ask for more results.`
 - `Use the essdive-datasets skill to search for BIONTE datasets and then show me the next page without exposing the cursor values.`
+- `Use the essdive-datasets skill to search for BIONTE datasets, then if I ask for more, continue the active search instead of searching again.`
 - `Use the essdive-datasets skill to list the version history for DOI 10.15485/2529445 and summarize the newest two versions.`
 - `Use the essdive-identifiers skill to normalize DOI https://doi.org/10.15485/2587853 and return the ESS-DIVE ID.`
 - `Use the essdive-data-citations skill to generate a citation for DOI 10.15485/3014404 with access date 2026-05-06.`

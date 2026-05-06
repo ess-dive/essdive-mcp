@@ -1,6 +1,6 @@
 ---
 name: essdive-datasets
-description: Search ESS-DIVE datasets, fetch metadata/version history/status/permissions, and parse FLMD via MCP tools.
+description: Search ESS-DIVE datasets, fetch metadata/version history/status/permissions, generate dataset citations, and parse FLMD via MCP tools.
 ---
 
 # Setup (once)
@@ -50,6 +50,7 @@ claude mcp add --transport stdio essdive-mcp -- uv run python ./src/essdive_mcp/
 - `next-search-page`
 - `previous-search-page`
 - `get-dataset`
+- `generate-data-citation`
 - `get-dataset-versions`
 - `next-dataset-versions-page`
 - `previous-dataset-versions-page`
@@ -191,6 +192,18 @@ Return the raw dataset payload when you need exact top-level API fields such as
 get-dataset with id="doi:10.15485/2529445" and format="raw"
 ```
 
+Generate a consistent data citation for a dataset:
+
+```
+generate-data-citation with id="doi:10.15485/3014404"
+```
+
+Use an explicit access date for reproducible exports or reports:
+
+```
+generate-data-citation with id="doi:10.15485/3014404" and access_date="2026-05-06"
+```
+
 Check publication/workflow status for a dataset:
 
 ```
@@ -256,6 +269,9 @@ coords-to-map-links with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
 - If the user asks for the status of multiple datasets, call `get-dataset-status` once per dataset identifier and summarize the results.
 - `get-dataset-status` may require an ESS-DIVE API token and dataset access. If an anonymous call fails, explain that status is auth-gated.
 - `get-dataset` supports `format="raw"` when you need the exact response fields, including top-level `isPublic`.
+- Use `generate-data-citation` when the user asks how to cite a dataset or when an export/report should include an ESS-DIVE data citation.
+- `generate-data-citation` accepts an `id` or an already-fetched raw `dataset_metadata` object. Prefer passing `dataset_metadata` when the workflow already called `get-dataset` with `format="raw"`.
+- Pass `access_date` when citation output must be reproducible; otherwise the MCP server uses its current date.
 - `page_size` max is 100.
 - `cursor` is the preferred way to page through search results. `row_start` is still supported for compatibility but is legacy.
 - Search and version responses include an integer `total` plus `nextCursor` and `previousCursor` when pagination is available.

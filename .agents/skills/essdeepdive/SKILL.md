@@ -1,6 +1,6 @@
 ---
 name: essdeepdive
-description: Query the ESS-DeepDive fusion database for fields and file metadata via MCP tools.
+description: Query the ESS-DeepDive fusion database for fields and file metadata, and generate citations for linked ESS-DIVE datasets via MCP tools.
 ---
 
 # Setup (once)
@@ -37,6 +37,7 @@ claude mcp add --transport stdio essdive-mcp -- uv run python ./src/essdive_mcp/
 - `search-ess-deepdive`
 - `get-ess-deepdive-dataset`
 - `get-ess-deepdive-file`
+- `generate-data-citation`
 - `lookup-project-portal`
 - `coords-to-map-links`
 
@@ -66,6 +67,12 @@ Get full file metadata and download info:
 get-ess-deepdive-file with doi="doi:10.15485/2453885" and file_path="dataset.zip/data.csv"
 ```
 
+Generate a citation for a dataset DOI found in ESS-DeepDive results:
+
+```
+generate-data-citation with id="doi:10.15485/2453885" and access_date="2026-05-06"
+```
+
 Look up a project acronym and its portal details:
 
 ```
@@ -82,4 +89,6 @@ coords-to-map-links with points=[[38.9219, -106.9490]] and zoom=12
 
 - `row_start` is 1-based. Use `max_pages` for automatic pagination.
 - `doi` may be provided as `10.xxxx/...` or `doi:10.xxxx/...`.
+- When a user asks for citable sources, report dataset-level citations with `generate-data-citation` using the DOI from ESS-DeepDive results.
+- Do not cite individual ESS-DeepDive field records as if they were standalone datasets; cite the linked ESS-DIVE dataset DOI.
 - For portal names, acronyms, and URLs, consult `../references/essdive_project_portals.yaml`.

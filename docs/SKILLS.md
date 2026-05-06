@@ -13,6 +13,7 @@ A Skill is a reusable instruction document that helps an AI agent handle a recur
 In this repository, the Skills help an agent:
 
 - search ESS-DIVE datasets
+- generate consistent ESS-DIVE data citations
 - convert between DOIs and ESS-DIVE IDs
 - query ESS-DeepDive field and file metadata
 - resolve ESS-DIVE project acronyms and portal URLs from a shared local reference file
@@ -83,6 +84,14 @@ Convert between ESS-DIVE dataset IDs and DOIs.
 
 See [`../.agents/skills/essdive-identifiers/SKILL.md`](../.agents/skills/essdive-identifiers/SKILL.md).
 
+### `essdive-data-citations`
+
+Generate consistent ESS-DIVE data citations from dataset IDs, DOIs, or raw
+dataset metadata, including provider, ESS-DIVE repository, DOI, and MCP/API
+access details.
+
+See [`../.agents/skills/essdive-data-citations/SKILL.md`](../.agents/skills/essdive-data-citations/SKILL.md).
+
 ### `essdeepdive`
 
 Query the ESS-DeepDive fusion database for fields and file metadata.
@@ -91,7 +100,9 @@ See [`../.agents/skills/essdeepdive/SKILL.md`](../.agents/skills/essdeepdive/SKI
 
 ### Shared mapping helper
 
-All three Skills also reference `coords-to-map-links` for turning points or bounding boxes into links for tools such as geojson.io and OpenStreetMap.
+The dataset, identifier, and ESS-DeepDive Skills also reference
+`coords-to-map-links` for turning points or bounding boxes into links for tools
+such as geojson.io and OpenStreetMap.
 
 ## Install In Claude Code
 
@@ -139,6 +150,11 @@ To remove them:
 
 - `Use the essdive-identifiers skill to convert DOI 10.15485/2587853 to an ESS-DIVE dataset ID.`
 - `Use the essdive-identifiers skill to normalize https://doi.org/10.15485/2587853 and return the DOI and dataset ID.`
+
+### `essdive-data-citations`
+
+- `Use the essdive-data-citations skill to generate a citation for DOI 10.15485/3014404.`
+- `Use the essdive-data-citations skill to generate a citation for DOI 10.15485/3014404 with access date 2026-05-06.`
 
 ### `essdeepdive`
 

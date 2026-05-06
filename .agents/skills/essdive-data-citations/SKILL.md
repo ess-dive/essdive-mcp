@@ -112,6 +112,7 @@ Kucsko G ; Maurer P C ; Yao N Y ; Kubo M ; Noh H J ; Lo P K ; Park H ; Lukin M D
 - The default access phrase is `ESS-DIVE API over ESS-DIVE MCP`.
 - `id` may be an ESS-DIVE package ID or a DOI in common DOI forms.
 - If another workflow already has the raw `get-dataset` payload, pass it as `dataset_metadata` to avoid an extra API request.
+- If `dataset_metadata` contains a non-ESS-DIVE DOI, the tool should still warn and avoid labeling it as an ESS-DIVE repository citation.
 - Use `doi-to-essdive-id` or `essdive-id-to-doi` first only when the user explicitly needs identifier conversion; `generate-data-citation` can fetch citation metadata directly from either a package ID or DOI.
 - For non-ESS-DIVE DOIs, preserve the warning in the final answer so the user can notice that a non-ESS-DIVE reference is present.
 - Invalid or unknown DOIs should return an error rather than a fabricated citation.

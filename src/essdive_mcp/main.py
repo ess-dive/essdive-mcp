@@ -1242,6 +1242,13 @@ def _is_essdive_doi(identifier: str) -> bool:
     return _normalize_doi(identifier).startswith("doi:10.15485/")
 
 
+def _crossref_access_method(access_method: str) -> str:
+    """Use a Crossref-specific access phrase unless the caller customized it."""
+    if access_method == DEFAULT_ESSDIVE_ACCESS_METHOD:
+        return DEFAULT_CROSSREF_ACCESS_METHOD
+    return access_method
+
+
 def _citation_person_name(person: Any) -> Optional[str]:
     """Return an ESS-DIVE citation-formatted person name."""
     if not isinstance(person, dict):
@@ -1301,8 +1308,10 @@ def _citation_doi(dataset: Dict[str, Any], package: Dict[str, Any]) -> Optional[
     for value in (
         dataset.get("@id"),
         dataset.get("doi"),
+        dataset.get("DOI"),
         package.get("doi"),
         package.get("@id"),
+        package.get("DOI"),
     ):
         text = sanitize_tsv_field(value)
         if not text:
@@ -1514,6 +1523,57 @@ def generate_essdive_data_citation(
     )
 
 
+def _metadata_dataset(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """Return nested dataset metadata when present, otherwise the metadata itself."""
+    dataset = metadata.get("dataset")
+    if isinstance(dataset, dict):
+        return dataset
+    return metadata
+
+
+async def generate_data_citation_for_metadata(
+    metadata: Dict[str, Any],
+    *,
+    access_date: Optional[str] = None,
+    access_method: str = DEFAULT_ESSDIVE_ACCESS_METHOD,
+) -> tuple[str, List[str]]:
+    """Generate a citation from provided metadata while preserving source clarity."""
+    if not isinstance(metadata, dict):
+        raise ValueError("metadata must be a dictionary.")
+
+    dataset = _metadata_dataset(metadata)
+    doi = _citation_doi(dataset, metadata)
+
+    if doi and not _is_essdive_doi(doi):
+        warnings = [
+            f"{doi} is not an ESS-DIVE DOI; provided metadata was not treated "
+            "as ESS-DIVE metadata."
+        ]
+        if metadata.get("DOI") or dataset.get("DOI"):
+            crossref_message = metadata
+        else:
+            crossref_message = await asyncio.to_thread(_fetch_crossref_work, doi)
+
+        return (
+            generate_crossref_data_citation(
+                crossref_message,
+                doi=doi,
+                access_date=access_date,
+                access_method=_crossref_access_method(access_method),
+            ),
+            warnings,
+        )
+
+    return (
+        generate_essdive_data_citation(
+            metadata,
+            access_date=access_date,
+            access_method=access_method,
+        ),
+        [],
+    )
+
+
 async def generate_data_citation_for_identifier(
     client: "ESSDiveClient",
     identifier: str,
@@ -1535,17 +1595,12 @@ async def generate_data_citation_for_identifier(
             f"{normalized_doi} is not an ESS-DIVE DOI; citation was generated "
             "from Crossref metadata and may not describe an ESS-DIVE dataset."
         )
-        crossref_access_method = (
-            DEFAULT_CROSSREF_ACCESS_METHOD
-            if access_method == DEFAULT_ESSDIVE_ACCESS_METHOD
-            else access_method
-        )
         return (
             generate_crossref_data_citation(
                 crossref_message,
                 doi=normalized_doi,
                 access_date=access_date,
-                access_method=crossref_access_method,
+                access_method=_crossref_access_method(access_method),
             ),
             warnings,
         )
@@ -1580,17 +1635,12 @@ async def generate_data_citation_for_identifier(
             "was generated from Crossref metadata and may not describe an "
             "ESS-DIVE dataset."
         )
-        crossref_access_method = (
-            DEFAULT_CROSSREF_ACCESS_METHOD
-            if access_method == DEFAULT_ESSDIVE_ACCESS_METHOD
-            else access_method
-        )
         return (
             generate_crossref_data_citation(
                 crossref_message,
                 doi=normalized_doi,
                 access_date=access_date,
-                access_method=crossref_access_method,
+                access_method=_crossref_access_method(access_method),
             ),
             warnings,
         )
@@ -3254,12 +3304,12 @@ def main():
         )
         try:
             if dataset_metadata is not None:
-                citation = generate_essdive_data_citation(
+                citation, warnings = await generate_data_citation_for_metadata(
                     dataset_metadata,
                     access_date=access_date,
                     access_method=access_method,
                 )
-                return _format_citation_output(citation, [])
+                return _format_citation_output(citation, warnings)
             elif id:
                 citation, warnings = await generate_data_citation_for_identifier(
                     client,

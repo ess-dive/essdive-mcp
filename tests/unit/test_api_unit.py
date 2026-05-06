@@ -28,6 +28,7 @@ from essdive_mcp.main import (
     generate_essdive_data_citation,
     generate_crossref_data_citation,
     generate_data_citation_for_identifier,
+    generate_data_citation_for_metadata,
     _format_citation_output,
     _fetch_crossref_work,
     _looks_like_doi_identifier,
@@ -2008,6 +2009,88 @@ class TestDataCitation:
             "doi:10.1038/nature12373 accessed via Crossref API over "
             "ESS-DIVE MCP on 2026-05-06"
         )
+
+    @pytest.mark.asyncio
+    async def test_generate_data_citation_for_metadata_keeps_essdive_source(self):
+        """ESS-DIVE metadata should keep ESS-DIVE repository citation formatting."""
+        citation, warnings = await generate_data_citation_for_metadata(
+            {
+                "dataset": {
+                    "@id": "doi:10.15485/example",
+                    "name": "Example dataset",
+                    "datePublished": "2025",
+                    "creator": {"givenName": "Ada", "familyName": "Lovelace"},
+                }
+            },
+            access_date="2026-05-06",
+        )
+
+        assert warnings == []
+        assert citation == (
+            "Lovelace A (2025): Example dataset. ESS-DIVE repository. "
+            "Dataset. doi:10.15485/example accessed via ESS-DIVE API over "
+            "ESS-DIVE MCP on 2026-05-06"
+        )
+
+    @pytest.mark.asyncio
+    async def test_generate_data_citation_for_metadata_warns_for_non_essdive_doi(self):
+        """Provided non-ESS-DIVE metadata should not be labeled as ESS-DIVE."""
+        crossref_message = {
+            "DOI": "10.1038/nature12373",
+            "type": "journal-article",
+            "title": ["Nanometre-scale thermometry in a living cell"],
+            "container-title": ["Nature"],
+            "issued": {"date-parts": [[2013]]},
+            "author": [{"given": "G.", "family": "Kucsko"}],
+        }
+
+        with patch(
+            "essdive_mcp.main._fetch_crossref_work",
+            return_value=crossref_message,
+        ) as fetch_crossref:
+            citation, warnings = await generate_data_citation_for_metadata(
+                {
+                    "@id": "doi:10.1038/nature12373",
+                    "name": "Nanometre-scale thermometry in a living cell",
+                    "datePublished": "2013",
+                    "creator": {"givenName": "G.", "familyName": "Kucsko"},
+                },
+                access_date="2026-05-06",
+            )
+
+        fetch_crossref.assert_called_once_with("doi:10.1038/nature12373")
+        assert warnings == [
+            "doi:10.1038/nature12373 is not an ESS-DIVE DOI; provided "
+            "metadata was not treated as ESS-DIVE metadata."
+        ]
+        assert "ESS-DIVE repository" not in citation
+        assert citation == (
+            "Kucsko G (2013): Nanometre-scale thermometry in a living cell. "
+            "Nature. Journal article. doi:10.1038/nature12373 accessed via "
+            "Crossref API over ESS-DIVE MCP on 2026-05-06"
+        )
+
+    @pytest.mark.asyncio
+    async def test_generate_data_citation_for_crossref_metadata_uses_provided_message(self):
+        """Crossref-shaped metadata should warn and avoid an extra fetch."""
+        citation, warnings = await generate_data_citation_for_metadata(
+            {
+                "DOI": "10.1038/nature12373",
+                "type": "journal-article",
+                "title": ["Nanometre-scale thermometry in a living cell"],
+                "container-title": ["Nature"],
+                "issued": {"date-parts": [[2013]]},
+                "author": [{"given": "G.", "family": "Kucsko"}],
+            },
+            access_date="2026-05-06",
+        )
+
+        assert warnings == [
+            "doi:10.1038/nature12373 is not an ESS-DIVE DOI; provided "
+            "metadata was not treated as ESS-DIVE metadata."
+        ]
+        assert citation.startswith("Kucsko G (2013):")
+        assert "Crossref API over ESS-DIVE MCP" in citation
 
     @pytest.mark.asyncio
     async def test_generate_data_citation_for_missing_essdive_doi_tries_crossref(self):

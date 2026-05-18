@@ -16,8 +16,8 @@ from essdive_mcp.main import (
     get_ess_deepdive_dataset,
     get_ess_deepdive_file,
     _summarize_essdeepdive_file_response,
-    _load_project_portals,
-    search_project_portals,
+    _load_projects,
+    search_projects,
     _dataset_matches_local_filters,
     _apply_local_dataset_filters,
     _default_dataset_search_is_public,
@@ -564,20 +564,20 @@ class TestToolErrorPayload:
         assert "RuntimeError: boom" in payload["error"]["traceback"]
 
 
-class TestProjectPortalReferences:
-    """Tests for shared ESS-DIVE project portal references."""
+class TestProjectReferences:
+    """Tests for shared ESS-DIVE project references."""
 
-    def test_load_project_portals(self):
-        """Project portal YAML should load a non-empty project list."""
-        portals = _load_project_portals()
+    def test_load_projects(self):
+        """Bundled project data should load a non-empty project list."""
+        portals = _load_projects()
 
         assert isinstance(portals, list)
         assert len(portals) >= 5
         assert any(item["acronym"] == "CHESS" for item in portals)
 
-    def test_search_project_portals_exact_acronym(self):
+    def test_search_projects_exact_acronym(self):
         """Exact acronym lookup should find the matching portal."""
-        result = search_project_portals("CHESS", limit=5)
+        result = search_projects("CHESS", limit=5)
 
         assert result["count"] >= 1
         first = result["results"][0]
@@ -585,17 +585,36 @@ class TestProjectPortalReferences:
         assert "Colorado Headwaters Ecological Spectroscopy Study" in first["name"]
         assert "ecosis.org" in first["url"]
 
-    def test_search_project_portals_alias(self):
+    def test_search_projects_alias(self):
         """Alias lookup should resolve portal entries."""
-        result = search_project_portals("East River", limit=5)
+        result = search_projects("East River", limit=5)
 
         assert result["count"] >= 1
         assert any("East River" in item["name"] or "East River" in " ".join(
             item["aliases"]) for item in result["results"])
 
-    def test_search_project_portals_without_query_lists_entries(self):
+    def test_search_projects_normalizes_watershed_alias_variants(self):
+        """Common Watershed shorthand variants should resolve to the canonical project."""
+        result = search_projects("Water Shed SFA", limit=5)
+
+        assert result["count"] >= 1
+        first = result["results"][0]
+        assert first["name"] == "Watershed Function SFA Dataset Collection"
+        assert "Watershed SFA" in first["aliases"]
+
+    def test_search_projects_finds_newly_added_entries(self):
+        """Recently added project references should be discoverable by name or alias."""
+        wade_result = search_projects("WaDE", limit=5)
+        missing_water_result = search_projects("Missing Mountain Water", limit=5)
+
+        assert wade_result["count"] >= 1
+        assert wade_result["results"][0]["name"] == "Watershed Dynamics and Evolution (WaDE) SFA"
+        assert missing_water_result["count"] >= 1
+        assert missing_water_result["results"][0]["name"] == "Seasonal Cycles Unravel Mysteries of Missing Mountain Water"
+
+    def test_search_projects_without_query_lists_entries(self):
         """Listing without a query should return a bounded set of entries."""
-        result = search_project_portals(limit=3)
+        result = search_projects(limit=3)
 
         assert result["query"] is None
         assert result["count"] >= 3
@@ -854,6 +873,28 @@ class TestESSDiveClient:
 
             params = mock_client_instance.get.call_args.kwargs["params"]
             assert params["sort"] == "dateUploaded:desc,authorLastName:asc"
+
+    @pytest.mark.asyncio
+    async def test_search_datasets_quotes_provider_name_for_exact_match(self):
+        """providerName should be quoted so the API treats it as an exact phrase."""
+        client = ESSDiveClient(api_token="test_token")
+
+        mock_response_obj = Mock()
+        mock_response_obj.json.return_value = {"result": [], "total": 0}
+        mock_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            await client.search_datasets(provider_name="Watershed Function SFA")
+
+            params = mock_client_instance.get.call_args.kwargs["params"]
+            assert params["providerName"] == '"Watershed Function SFA"'
 
     @pytest.mark.asyncio
     async def test_search_datasets_cursor_omits_legacy_row_start_and_default_page_size(self):

@@ -53,7 +53,7 @@ Without the MCP server:
 - some Skill docs include fallback direct API examples
 - behavior depends more on your client's native tools and capabilities
 
-The shared project reference file lives at [`../.agents/skills/references/essdive_project_portals.yaml`](../.agents/skills/references/essdive_project_portals.yaml).
+The shared project reference file lives at [`../.agents/skills/references/essdive_projects.yaml`](../.agents/skills/references/essdive_projects.yaml).
 
 ## Available Skills
 
@@ -65,10 +65,15 @@ See [`../.agents/skills/essdive-datasets/SKILL.md`](../.agents/skills/essdive-da
 
 This Skill also covers a two-step search pattern for dataset metadata fields that are not native `/packages` query params, such as `variableMeasured`, `measurementTechnique`, `funder`, `creator.affiliation`, and file-level distribution metadata.
 
+It also tells agents to normalize provider/project names to the canonical ESS-DIVE
+name before using `provider_name`. For example, `Watershed SFA` or
+`Water Shed SFA` should be normalized to `Watershed Function SFA`.
+
 What that enables in practice:
 
 - start with a broad search like `East River`
 - then narrow the current result page by creator affiliation, measured variable, funder, license, or file metadata
+- normalize a user-supplied provider alias or spacing variant to the canonical provider name before searching
 
 Verified live on April 2, 2026 with `page_size=5`:
 
@@ -147,6 +152,7 @@ To remove them:
 - `Use the essdive-datasets skill to check the status of dataset ess-dive-f78cb03d11550da-20260309T160313214.`
 - `Use the essdive-datasets skill to search for East River datasets and then keep only results with Lawrence Berkeley Lab creator affiliations.`
 - `Use the essdive-datasets skill to search for East River datasets and then keep only results where variableMeasured includes streamflow.`
+- `Use the essdive-datasets skill to normalize "Watershed SFA" to the canonical provider name and search for matching datasets.`
 
 ### `essdive-identifiers`
 

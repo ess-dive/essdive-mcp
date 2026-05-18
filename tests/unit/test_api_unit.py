@@ -16,8 +16,8 @@ from essdive_mcp.main import (
     get_ess_deepdive_dataset,
     get_ess_deepdive_file,
     _summarize_essdeepdive_file_response,
-    _load_project_portals,
-    search_project_portals,
+    _load_projects,
+    search_projects,
     _dataset_matches_local_filters,
     _apply_local_dataset_filters,
     _default_dataset_search_is_public,
@@ -564,20 +564,20 @@ class TestToolErrorPayload:
         assert "RuntimeError: boom" in payload["error"]["traceback"]
 
 
-class TestProjectPortalReferences:
-    """Tests for shared ESS-DIVE project portal references."""
+class TestProjectReferences:
+    """Tests for shared ESS-DIVE project references."""
 
-    def test_load_project_portals(self):
-        """Project portal YAML should load a non-empty project list."""
-        portals = _load_project_portals()
+    def test_load_projects(self):
+        """Bundled project data should load a non-empty project list."""
+        portals = _load_projects()
 
         assert isinstance(portals, list)
         assert len(portals) >= 5
         assert any(item["acronym"] == "CHESS" for item in portals)
 
-    def test_search_project_portals_exact_acronym(self):
+    def test_search_projects_exact_acronym(self):
         """Exact acronym lookup should find the matching portal."""
-        result = search_project_portals("CHESS", limit=5)
+        result = search_projects("CHESS", limit=5)
 
         assert result["count"] >= 1
         first = result["results"][0]
@@ -585,17 +585,26 @@ class TestProjectPortalReferences:
         assert "Colorado Headwaters Ecological Spectroscopy Study" in first["name"]
         assert "ecosis.org" in first["url"]
 
-    def test_search_project_portals_alias(self):
+    def test_search_projects_alias(self):
         """Alias lookup should resolve portal entries."""
-        result = search_project_portals("East River", limit=5)
+        result = search_projects("East River", limit=5)
 
         assert result["count"] >= 1
         assert any("East River" in item["name"] or "East River" in " ".join(
             item["aliases"]) for item in result["results"])
 
-    def test_search_project_portals_without_query_lists_entries(self):
+    def test_search_projects_normalizes_watershed_alias_variants(self):
+        """Common Watershed shorthand variants should resolve to the canonical project."""
+        result = search_projects("Water Shed SFA", limit=5)
+
+        assert result["count"] >= 1
+        first = result["results"][0]
+        assert first["name"] == "Watershed Function SFA Dataset Collection"
+        assert "Watershed SFA" in first["aliases"]
+
+    def test_search_projects_without_query_lists_entries(self):
         """Listing without a query should return a bounded set of entries."""
-        result = search_project_portals(limit=3)
+        result = search_projects(limit=3)
 
         assert result["query"] is None
         assert result["count"] >= 3

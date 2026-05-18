@@ -39,8 +39,8 @@ MCP Tools Available:
     and access details for ESS-DIVE metadata, with Crossref fallback for other DOIs.
 
 **Project References:**
-  - lookup-project-portal: Look up ESS-DIVE-related project names, acronyms, descriptions,
-    and portal URLs from a shared local reference file.
+    - lookup-project-portal: Look up ESS-DIVE-related project names, acronyms, descriptions,
+        and portal URLs from shared local project reference data.
 
 **ESS-DeepDive Search & Analysis:**
   - search-ess-deepdive: Search the ESS-DeepDive fusion database for data fields by name,
@@ -77,12 +77,13 @@ import requests
 from io import StringIO
 from typing import Dict, List, Optional, Any, Union, Awaitable, Callable, TypeVar
 import httpx
-import yaml
 from urllib.parse import quote
 from urllib.parse import quote as url_quote
 
 from fastmcp import FastMCP
 from fastmcp.server.context import Context
+from essdive_mcp import projects as projects_module
+from essdive_mcp.projects import ESSDIVE_PROJECTS
 
 
 LOGGER = logging.getLogger("essdive_mcp")
@@ -99,13 +100,7 @@ CROSSREF_USER_AGENT = (
     "essdive-mcp/0.3.1 (https://github.com/ess-dive/essdive-mcp)"
 )
 T = TypeVar("T")
-PROJECT_PORTALS_PATH = (
-    Path(__file__).resolve().parents[2]
-    / ".agents"
-    / "skills"
-    / "references"
-    / "essdive_project_portals.yaml"
-)
+PROJECTS_SOURCE_PATH = str(Path(projects_module.__file__).resolve())
 
 
 def _is_truthy(value: Optional[str]) -> bool:
@@ -1111,24 +1106,10 @@ def _normalize_lookup_text(value: str) -> str:
 
 
 @lru_cache(maxsize=1)
-def _load_project_portals() -> List[Dict[str, Any]]:
-    """Load portal metadata shared by the MCP server and Skills."""
-    if not PROJECT_PORTALS_PATH.exists():
-        raise FileNotFoundError(
-            f"Project portal reference file not found: {PROJECT_PORTALS_PATH}"
-        )
-
-    with PROJECT_PORTALS_PATH.open("r", encoding="utf-8") as handle:
-        payload = yaml.safe_load(handle) or {}
-
-    projects = payload.get("projects")
-    if not isinstance(projects, list):
-        raise ValueError(
-            f"Expected 'projects' list in {PROJECT_PORTALS_PATH}, found {type(projects).__name__}."
-        )
-
+def _load_projects() -> List[Dict[str, Any]]:
+    """Load project reference metadata bundled with the MCP package."""
     normalized_projects: List[Dict[str, Any]] = []
-    for item in projects:
+    for item in ESSDIVE_PROJECTS:
         if not isinstance(item, dict):
             continue
 
@@ -1150,21 +1131,26 @@ def _load_project_portals() -> List[Dict[str, Any]]:
     return normalized_projects
 
 
-def search_project_portals(
+def _load_project_portals() -> List[Dict[str, Any]]:
+    """Backward-compatible wrapper for older internal imports."""
+    return _load_projects()
+
+
+def search_projects(
     query: Optional[str] = None,
     limit: int = 10,
 ) -> Dict[str, Any]:
-    """Search the shared project portal reference list by acronym, name, or alias."""
+    """Search the shared project reference list by acronym, name, or alias."""
     if limit <= 0:
         raise ValueError("limit must be greater than 0.")
 
-    projects = _load_project_portals()
+    projects = _load_projects()
     if not query:
         return {
             "query": None,
             "count": len(projects),
             "results": projects[:limit],
-            "source_file": str(PROJECT_PORTALS_PATH),
+            "source_file": PROJECTS_SOURCE_PATH,
         }
 
     normalized_query = _normalize_lookup_text(query)
@@ -1208,8 +1194,16 @@ def search_project_portals(
         "query": query,
         "count": len(results),
         "results": results,
-        "source_file": str(PROJECT_PORTALS_PATH),
+        "source_file": PROJECTS_SOURCE_PATH,
     }
+
+
+def search_project_portals(
+    query: Optional[str] = None,
+    limit: int = 10,
+) -> Dict[str, Any]:
+    """Backward-compatible wrapper for older internal imports."""
+    return search_projects(query=query, limit=limit)
 
 
 def _validate_dataset_search_spatial_params(
@@ -3689,7 +3683,7 @@ def main():
     )
     def lookup_project_portal_tool(query: Optional[str] = None, limit: int = 10) -> str:
         """
-        Look up project background information from the shared ESS-DIVE portal reference list.
+        Look up project background information from the shared ESS-DIVE project reference list.
 
         This is useful when users mention an acronym or project name, such as CHESS,
         and the agent needs a quick expansion plus a URL for more context.
@@ -3709,7 +3703,7 @@ def main():
         LOGGER.debug(
             "Tool lookup-project-portal called query=%r limit=%s", query, limit)
         try:
-            result = search_project_portals(query=query, limit=limit)
+            result = search_projects(query=query, limit=limit)
             return json.dumps(result, indent=2)
         except Exception as exc:
             return _tool_error_response(

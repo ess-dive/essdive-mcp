@@ -602,6 +602,16 @@ class TestProjectReferences:
         assert first["name"] == "Watershed Function SFA Dataset Collection"
         assert "Watershed SFA" in first["aliases"]
 
+    def test_search_projects_finds_newly_added_entries(self):
+        """Recently added project references should be discoverable by name or alias."""
+        wade_result = search_projects("WaDE", limit=5)
+        missing_water_result = search_projects("Missing Mountain Water", limit=5)
+
+        assert wade_result["count"] >= 1
+        assert wade_result["results"][0]["name"] == "Watershed Dynamics and Evolution (WaDE) SFA"
+        assert missing_water_result["count"] >= 1
+        assert missing_water_result["results"][0]["name"] == "Seasonal Cycles Unravel Mysteries of Missing Mountain Water"
+
     def test_search_projects_without_query_lists_entries(self):
         """Listing without a query should return a bounded set of entries."""
         result = search_projects(limit=3)

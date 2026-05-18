@@ -141,3 +141,29 @@ projects:
     short_description: Portal for the Niwot Ridge alpine treeline warming experiment combining common gardens and infrared warming treatments.
     portal_url: https://data.ess-dive.lbl.gov/portals/ATWE
     url: https://lara-kueppers.com/alpine-treeline-warming-experiment/
+
+  - name: Watershed Dynamics and Evolution (WaDE) SFA
+    acronym: WaDE SFA
+    aliases:
+      - Watershed Dynamics and Evolution SFA
+      - WaDE
+    short_description: Science Focus Area research on watershed hydro-biogeochemical function and model-data integration, including stream metabolism studies.
+    portal_url:
+    url: https://ess.science.energy.gov/science-focus-area/watershed-dynamics-and-evolution/
+
+  - name: Seasonal Cycles Unravel Mysteries of Missing Mountain Water
+    acronym:
+    aliases:
+      - Missing Mountain Water
+    short_description: Study of how snow distribution, subsurface connectivity, and seasonal hydrologic variability affect mountain water availability in western U.S. basins.
+    portal_url:
+    url: https://depts.washington.edu/mtnhydr/Pages/Research%20Profiles/MissingWater.html
+
+  - name: Modelling Microbes to Predict Post-fire Carbon Cycling in the Boreal Forest across Burn Severities
+    acronym:
+    aliases:
+      - Post-fire Carbon Cycling in the Boreal Forest across Burn Severities
+      - Modelling Microbes
+    short_description: Research on microbial controls over post-fire carbon cycling across boreal forest burn-severity gradients, using modeling to improve prediction of carbon outcomes.
+    portal_url:
+    url: https://www.genomicscience.energy.gov/environmental-microbiome-research/

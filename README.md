@@ -818,7 +818,7 @@ For the easiest install, copy this repository's Skill tree into one of Goose's s
   essdive-identifiers/SKILL.md
   essdive-data-citations/SKILL.md
   essdeepdive/SKILL.md
-  references/essdive_project_portals.yaml
+  references/essdive_projects.yaml
 ```
 
 That means either:
@@ -832,7 +832,7 @@ If you prefer to create the files manually, create these directories and then co
 - [SKILL.md](/home/harry/essdive-mcp/.agents/skills/essdive-identifiers/SKILL.md)
 - [SKILL.md](/home/harry/essdive-mcp/.agents/skills/essdive-data-citations/SKILL.md)
 - [SKILL.md](/home/harry/essdive-mcp/.agents/skills/essdeepdive/SKILL.md)
-- [essdive_project_portals.yaml](/home/harry/essdive-mcp/.agents/skills/references/essdive_project_portals.yaml)
+- [essdive_projects.yaml](/home/harry/essdive-mcp/.agents/skills/references/essdive_projects.yaml)
 
 After copying the files:
 

@@ -74,6 +74,13 @@ Filter by creator and provider:
 search-datasets with creator="Smith" and provider_name="NGEE Arctic" and page_size=5
 ```
 
+When a user gives an approximate provider/project name, normalize it to the
+canonical ESS-DIVE provider name before calling `search-datasets`. Examples:
+`Watershed SFA` and `Water Shed SFA` should be normalized to
+`Watershed Function SFA`. Use `lookup-project-portal` and the shared project
+reference file to resolve acronyms, aliases, and spacing variants whenever
+there is ambiguity.
+
 Filter by temporal coverage:
 
 ```
@@ -292,10 +299,11 @@ coords-to-map-links with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
 - `bbox` uses `[min_lat, min_lon, max_lat, max_lon]` ordering and can also be passed as a comma-delimited string.
 - Point search requires `lat`, `lon`, and `radius` together. Do not combine point search with `bbox`.
 - Native ESS-DIVE `/packages` filters include `query`/`text`, `creator`, `provider_name`, `date_published`, `begin_date`, `end_date`, `keywords`, `sort`, `bbox`, and `lat`/`lon`/`radius`.
+- For `provider_name`, prefer the canonical ESS-DIVE provider/project name rather than a shorthand or spacing variant. Normalize likely variants first, then pass the canonical name to `search-datasets`.
 - Additional filters such as `creator_affiliation`, `variable_measured`, `measurement_technique`, `funder`, `license`, `alternate_name`, `editor`, `file_format`, `file_name`, and `file_url` are applied locally after the initial API search using full dataset metadata from `get-dataset`.
 - If you need very precise filtering on those local-only fields, start with a narrower native search first, then apply the local metadata filters.
 - Local metadata filtering only inspects the current API page, so increase `page_size` or adjust `row_start` if you want to scan more native matches.
-- For portal names, acronyms, and URLs, consult `../references/essdive_project_portals.yaml`.
+- For project names, acronyms, aliases, and URLs, consult `../references/essdive_projects.yaml`.
 
 ## Fallback (no MCP server)
 

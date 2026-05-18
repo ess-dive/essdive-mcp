@@ -856,6 +856,28 @@ class TestESSDiveClient:
             assert params["sort"] == "dateUploaded:desc,authorLastName:asc"
 
     @pytest.mark.asyncio
+    async def test_search_datasets_quotes_provider_name_for_exact_match(self):
+        """providerName should be quoted so the API treats it as an exact phrase."""
+        client = ESSDiveClient(api_token="test_token")
+
+        mock_response_obj = Mock()
+        mock_response_obj.json.return_value = {"result": [], "total": 0}
+        mock_response_obj.raise_for_status = Mock()
+
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client_instance = AsyncMock()
+            mock_client_instance.get = AsyncMock(
+                return_value=mock_response_obj)
+            mock_client_instance.__aenter__.return_value = mock_client_instance
+            mock_client_instance.__aexit__.return_value = None
+            mock_client_class.return_value = mock_client_instance
+
+            await client.search_datasets(provider_name="Watershed Function SFA")
+
+            params = mock_client_instance.get.call_args.kwargs["params"]
+            assert params["providerName"] == '"Watershed Function SFA"'
+
+    @pytest.mark.asyncio
     async def test_search_datasets_cursor_omits_legacy_row_start_and_default_page_size(self):
         """Cursor follow-up search requests should not force rowStart or pageSize defaults."""
         client = ESSDiveClient(api_token="test_token")

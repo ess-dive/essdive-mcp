@@ -324,6 +324,21 @@ def _empty_dataset_search_result(
     return payload
 
 
+def _quote_exact_search_phrase(value: str) -> str:
+    """Wrap a search value in quotes so ESS-DIVE treats it as an exact phrase."""
+    normalized_value = value.strip()
+    if not normalized_value:
+        return normalized_value
+    if (
+        len(normalized_value) >= 2
+        and normalized_value[0] == '"'
+        and normalized_value[-1] == '"'
+    ):
+        return normalized_value
+    escaped_value = normalized_value.replace('"', '\\"')
+    return f'"{escaped_value}"'
+
+
 def _run_in_new_event_loop(awaitable: Awaitable[T]) -> T:
     """Run an awaitable in a dedicated event loop for sync helper functions."""
     loop = asyncio.new_event_loop()
@@ -1955,7 +1970,7 @@ class ESSDiveClient:
         if creator:
             params["creator"] = creator
         if provider_name:
-            params["providerName"] = provider_name
+            params["providerName"] = _quote_exact_search_phrase(provider_name)
         if text:
             params["text"] = text
         if date_published:

@@ -320,6 +320,33 @@ curl -sG "https://api.ess-dive.lbl.gov/packages" \
   --data-urlencode "isPublic=true"
 ```
 
+Search by exact or near-exact dataset title, following the pattern used in
+`query_essdive.sh`:
+
+```bash
+title="Seasonal Cycles Unravel Mysteries of Missing Mountain Water"
+
+curl -sG "https://api.ess-dive.lbl.gov/packages" \
+  -H "Accept: application/json" \
+  --data-urlencode "title=$title" \
+  --data-urlencode "pageSize=3" \
+  --data-urlencode "isPublic=true"
+```
+
+Search for all datasets associated with a canonical ESS-DIVE provider/project
+name when one project may contain many datasets:
+
+```bash
+provider_name="Watershed Function SFA"
+
+curl -sG "https://api.ess-dive.lbl.gov/packages" \
+  -H "Accept: application/json" \
+  --data-urlencode "providerName=\"$provider_name\"" \
+  --data-urlencode "pageSize=10" \
+  --data-urlencode "sort=dateUploaded:desc" \
+  --data-urlencode "isPublic=true"
+```
+
 Follow a dataset-search cursor directly against the API:
 
 ```bash

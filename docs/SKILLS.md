@@ -86,10 +86,13 @@ See [`../.agents/skills/essdive-identifiers/SKILL.md`](../.agents/skills/essdive
 
 ### `essdive-data-citations`
 
-Generate consistent ESS-DIVE data citations from dataset IDs, DOIs, or raw
-dataset metadata, including provider, ESS-DIVE repository, DOI, and MCP/API
-access details. For non-ESS-DIVE DOIs, the Skill tells agents to preserve the
-warning and use Crossref-derived citation metadata when available.
+Generate consistent ESS-DIVE data citations from dataset IDs, DOIs, raw dataset
+metadata, raw search/page results, or direct dataset-search filters. The Skill
+guides agents to reuse the API-provided top-level `citation` field from
+`/packages` and `/packages/{identifier}` when available, and to fetch
+`/packages/{identifier}` only for missing citation fields. For non-ESS-DIVE
+DOIs, the Skill tells agents to preserve the warning and use Crossref-derived
+citation metadata when available.
 
 See [`../.agents/skills/essdive-data-citations/SKILL.md`](../.agents/skills/essdive-data-citations/SKILL.md).
 
@@ -157,6 +160,8 @@ To remove them:
 
 - `Use the essdive-data-citations skill to generate a citation for DOI 10.15485/3014404.`
 - `Use the essdive-data-citations skill to generate a citation for DOI 10.15485/3014404 with access date 2026-05-06.`
+- `Use the essdive-data-citations skill to generate citations for BIONTE search results without per-dataset metadata lookups.`
+- `Use the essdive-data-citations skill to generate citations from this raw search-datasets result page.`
 
 ### `essdeepdive`
 

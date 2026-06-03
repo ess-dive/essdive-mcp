@@ -73,6 +73,12 @@ Generate a citation for a dataset DOI found in ESS-DeepDive results:
 generate-data-citation with id="doi:10.15485/2453885" and access_date="2026-05-06"
 ```
 
+Generate citations for several linked ESS-DIVE dataset DOIs in one call:
+
+```
+generate-data-citation with ids=["doi:10.15485/2453885", "doi:10.15485/3014404"] and access_date="2026-05-06"
+```
+
 Look up a project acronym and its portal details:
 
 ```
@@ -90,5 +96,6 @@ coords-to-map-links with points=[[38.9219, -106.9490]] and zoom=12
 - `row_start` is 1-based. Use `max_pages` for automatic pagination.
 - `doi` may be provided as `10.xxxx/...` or `doi:10.xxxx/...`.
 - When a user asks for citable sources, report dataset-level citations with `generate-data-citation` using the DOI from ESS-DeepDive results.
+- Use `ids` on `generate-data-citation` when citing multiple linked ESS-DIVE dataset DOIs from ESS-DeepDive results.
 - Do not cite individual ESS-DeepDive field records as if they were standalone datasets; cite the linked ESS-DIVE dataset DOI.
 - For portal names, acronyms, and URLs, consult `../references/essdive_project_portals.yaml`.

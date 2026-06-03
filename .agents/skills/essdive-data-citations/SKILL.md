@@ -41,6 +41,9 @@ claude mcp add --transport stdio essdive-mcp --env ESSDIVE_API_TOKEN=YOUR_ESS_DI
 # Tools
 
 - `generate-data-citation`
+- `search-datasets`
+- `next-search-page`
+- `previous-search-page`
 - `get-dataset`
 - `doi-to-essdive-id`
 - `essdive-id-to-doi`
@@ -69,11 +72,48 @@ workflow:
 generate-data-citation with id="doi:10.15485/3014404" and access_date="2026-05-06" and access_method="custom export workflow"
 ```
 
-Use already-fetched metadata instead of requesting the dataset again:
+Generate citations for a known set of package IDs or DOIs:
+
+```
+generate-data-citation with ids=["doi:10.15485/3014404", "ess-dive-example-id"] and access_date="2026-05-06"
+```
+
+Generate citations directly from a search result page. This uses the
+`/packages` list response and reuses each result item's top-level `citation`
+field when present:
+
+```
+generate-data-citation with query="BIONTE" and page_size=10 and access_date="2026-05-06"
+```
+
+Use already-fetched package metadata instead of requesting the dataset again:
 
 ```
 get-dataset with id="doi:10.15485/3014404" and format="raw"
 generate-data-citation with dataset_metadata=PASTE_RAW_DATASET_METADATA and access_date="2026-05-06"
+```
+
+Use already-fetched search results, including next/previous page results,
+instead of repeating lookups:
+
+```
+search-datasets with query="BIONTE" and page_size=10 and format="raw"
+generate-data-citation with dataset_metadata=PASTE_RAW_SEARCH_RESULTS and access_date="2026-05-06"
+```
+
+After a stateful page tool:
+
+```
+next-search-page with format="raw"
+generate-data-citation with dataset_metadata=PASTE_RAW_NEXT_PAGE_RESULTS and access_date="2026-05-06"
+```
+
+When you have an ID list and a matching raw search response, pass both. The tool
+will reuse matching result-item citations and fetch `/packages/{identifier}` only
+for requested IDs whose supplied metadata does not contain `citation`:
+
+```
+generate-data-citation with ids=["ess-dive-present", "ess-dive-needs-lookup"] and dataset_metadata=PASTE_RAW_SEARCH_RESULTS and access_date="2026-05-06"
 ```
 
 Generate a warning-backed citation for a non-ESS-DIVE DOI:
@@ -111,7 +151,12 @@ Kucsko G ; Maurer P C ; Yao N Y ; Kubo M ; Noh H J ; Lo P K ; Park H ; Lukin M D
 - Pass `access_date` when the output needs to be reproducible. Otherwise the tool uses the MCP server's current date.
 - The default access phrase is `ESS-DIVE API over ESS-DIVE MCP`.
 - `id` may be an ESS-DIVE package ID or a DOI in common DOI forms.
+- `ids` accepts multiple ESS-DIVE package IDs or DOIs and returns one citation per identifier in order.
 - If another workflow already has the raw `get-dataset` payload, pass it as `dataset_metadata` to avoid an extra API request.
+- If another workflow already has raw `search-datasets`, `next-search-page`, or `previous-search-page` output, pass that whole response as `dataset_metadata`. Do not loop over IDs yourself unless the user needs per-ID control.
+- The ESS-DIVE `/packages` search/list response and `/packages/{identifier}` response can include a top-level `citation` field. The citation tool reuses that string first, then appends repository/access details.
+- For search/list result items without `citation`, the citation tool falls back to `/packages/{identifier}` for only those missing items.
+- Use direct search arguments on `generate-data-citation` when the user asks for citations for a search result page and no search has been run yet.
 - If `dataset_metadata` contains a non-ESS-DIVE DOI, the tool should still warn and avoid labeling it as an ESS-DIVE repository citation.
 - Use `doi-to-essdive-id` or `essdive-id-to-doi` first only when the user explicitly needs identifier conversion; `generate-data-citation` can fetch citation metadata directly from either a package ID or DOI.
 - For non-ESS-DIVE DOIs, preserve the warning in the final answer so the user can notice that a non-ESS-DIVE reference is present.
@@ -119,10 +164,11 @@ Kucsko G ; Maurer P C ; Yao N Y ; Kubo M ; Noh H J ; Lo P K ; Park H ; Lukin M D
 
 ## Fallback (no MCP server)
 
-If the MCP server is unavailable, fetch the dataset metadata from the ESS-DIVE
-API and construct the same citation shape from `dataset.creator`,
-`dataset.datePublished`, `dataset.name`, `dataset.provider.name`, and
-`dataset.@id`:
+If the MCP server is unavailable, fetch search/list or dataset metadata from the
+ESS-DIVE API. Prefer the API-provided top-level `citation` field from
+`/packages` or `/packages/{identifier}` when present. Only construct the same
+citation shape from `dataset.creator`, `dataset.datePublished`, `dataset.name`,
+`dataset.provider.name`, and `dataset.@id` if the response has no `citation`:
 
 ```bash
 curl -sG "https://api.ess-dive.lbl.gov/packages/doi%3A10.15485%2F3014404" \

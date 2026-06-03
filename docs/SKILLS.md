@@ -68,6 +68,8 @@ This Skill also covers a two-step search pattern for dataset metadata fields tha
 It also tells agents to normalize provider/project names to the canonical ESS-DIVE
 name before using `provider_name`. For example, `Watershed SFA` or
 `Water Shed SFA` should be normalized to `Watershed Function SFA`.
+The shared project reference combines curated portal entries with additional
+projects imported from the ESS-DIVE Mule project registry.
 
 What that enables in practice:
 

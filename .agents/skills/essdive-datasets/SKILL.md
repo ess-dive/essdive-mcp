@@ -316,7 +316,7 @@ coords-to-map-links with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
 - `next-search-page` and `previous-search-page` page through the most recent `search-datasets` request without requiring the caller to pass cursors.
 - When a user says "more", "next", "continue", "show more results", or "previous" after a dataset search, assume they are referring to the active search result set and use `next-search-page` or `previous-search-page` instead of re-running `search-datasets`.
 - For cursor follow-up searches, omit `cursor` on the first request, then pass the returned `nextCursor` or `previousCursor` value unchanged on later requests. Reuse the same search filters and omit `page_size` unless you know it matches the cursor's encoded page size.
-- For a conversational “show me the next page” flow, prefer the stateful next/previous page tools. Use raw mode only when you explicitly need to inspect or persist the API cursor values.
+- For a conversational "show me the next page" flow, prefer the stateful next/previous page tools. Use raw mode only when you explicitly need to inspect or persist the API cursor values.
 - `sort` accepts comma-separated `field:direction` clauses. Supported fields: `name`, `dateUploaded`, `authorLastName`. Supported directions: `asc`, `desc`.
 - `get-dataset-versions` lists visible versions from newest to oldest and supports cursor pagination.
 - `next-dataset-versions-page` and `previous-dataset-versions-page` page through the most recent `get-dataset-versions` request without requiring the caller to pass cursors.
@@ -329,7 +329,7 @@ coords-to-map-links with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
 - Additional filters such as `creator_affiliation`, `variable_measured`, `measurement_technique`, `funder`, `license`, `alternate_name`, `editor`, `file_format`, `file_name`, and `file_url` are applied locally after the initial API search using full dataset metadata from `get-dataset`.
 - If you need very precise filtering on those local-only fields, start with a narrower native search first, then apply the local metadata filters.
 - Local metadata filtering only inspects the current API page, so increase `page_size` or adjust `row_start` if you want to scan more native matches.
-- For project names, acronyms, aliases, and URLs, consult `../references/essdive_projects.yaml`.
+- For project names, acronyms, aliases, Mule IDs, and URLs, consult `../references/essdive_projects.yaml`. It combines curated portal entries with projects imported from the ESS-DIVE Mule project registry.
 
 ## Fallback (no MCP server)
 

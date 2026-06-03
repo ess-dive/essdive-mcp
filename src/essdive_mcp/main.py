@@ -1493,6 +1493,14 @@ def generate_essdive_data_citation(
     if not access_method_value:
         raise ValueError("access_method must not be blank.")
 
+    existing_citation = sanitize_tsv_field(metadata.get("citation"))
+    if existing_citation:
+        base_citation = _ensure_repository_clause(existing_citation)
+        return (
+            f"{base_citation} accessed via {access_method_value} "
+            f"on {access_date_value}"
+        )
+
     creators = [
         name
         for name in (
@@ -1519,14 +1527,6 @@ def generate_essdive_data_citation(
             f"accessed via {access_method_value} on {access_date_value}"
         )
 
-    existing_citation = sanitize_tsv_field(metadata.get("citation"))
-    if existing_citation:
-        base_citation = _ensure_repository_clause(existing_citation)
-        return (
-            f"{base_citation} accessed via {access_method_value} "
-            f"on {access_date_value}"
-        )
-
     missing = []
     if not creators:
         missing.append("dataset.creator")
@@ -1546,6 +1546,93 @@ def _metadata_dataset(metadata: Dict[str, Any]) -> Dict[str, Any]:
     if isinstance(dataset, dict):
         return dataset
     return metadata
+
+
+def _metadata_citation_entries(metadata: Any) -> List[Dict[str, Any]]:
+    """Return package metadata entries from a package, package list, or result array."""
+    if isinstance(metadata, list):
+        return [item for item in metadata if isinstance(item, dict)]
+
+    if not isinstance(metadata, dict):
+        return []
+
+    results = metadata.get("result")
+    if isinstance(results, list):
+        return [item for item in results if isinstance(item, dict)]
+
+    return [metadata]
+
+
+def _metadata_lookup_identifier(metadata: Dict[str, Any]) -> Optional[str]:
+    """Return the best identifier to use for an ESS-DIVE package metadata lookup."""
+    identifier = sanitize_tsv_field(metadata.get("id"))
+    if identifier:
+        return identifier
+
+    dataset = _metadata_dataset(metadata)
+    doi = _citation_doi(dataset, metadata)
+    if doi:
+        return doi
+
+    return None
+
+
+def _metadata_lookup_keys(metadata: Dict[str, Any]) -> List[str]:
+    """Return normalized keys that can match provided identifiers to metadata."""
+    keys: List[str] = []
+    for value in (
+        metadata.get("id"),
+        metadata.get("@id"),
+        metadata.get("doi"),
+        metadata.get("DOI"),
+    ):
+        text = sanitize_tsv_field(value)
+        if text:
+            keys.append(text)
+
+    dataset = _metadata_dataset(metadata)
+    for value in (
+        dataset.get("@id"),
+        dataset.get("doi"),
+        dataset.get("DOI"),
+    ):
+        text = sanitize_tsv_field(value)
+        if text:
+            keys.append(text)
+
+    normalized_keys: List[str] = []
+    for key in keys:
+        normalized_keys.append(key)
+        if _looks_like_doi_identifier(key):
+            normalized_keys.append(_normalize_doi(key))
+
+    unique_keys: List[str] = []
+    seen = set()
+    for key in normalized_keys:
+        if key not in seen:
+            seen.add(key)
+            unique_keys.append(key)
+    return unique_keys
+
+
+def _metadata_index_by_identifier(metadata: Any) -> Dict[str, Dict[str, Any]]:
+    """Index package metadata entries by ESS-DIVE IDs and DOI variants."""
+    indexed: Dict[str, Dict[str, Any]] = {}
+    for item in _metadata_citation_entries(metadata):
+        for key in _metadata_lookup_keys(item):
+            indexed.setdefault(key, item)
+    return indexed
+
+
+def _identifier_lookup_keys(identifier: str) -> List[str]:
+    """Return identifier variants for looking up supplied metadata entries."""
+    key = sanitize_tsv_field(identifier)
+    if not key:
+        return []
+    keys = [key]
+    if _looks_like_doi_identifier(key):
+        keys.append(_normalize_doi(key))
+    return keys
 
 
 async def generate_data_citation_for_metadata(
@@ -1589,6 +1676,79 @@ async def generate_data_citation_for_metadata(
         ),
         [],
     )
+
+
+async def generate_data_citation_for_search_item(
+    client: "ESSDiveClient",
+    metadata: Dict[str, Any],
+    *,
+    access_date: Optional[str] = None,
+    access_method: str = DEFAULT_ESSDIVE_ACCESS_METHOD,
+) -> tuple[str, List[str]]:
+    """Generate a citation for a search/list item, fetching detail only if needed."""
+    if not isinstance(metadata, dict):
+        raise ValueError("metadata must be a dictionary.")
+
+    if sanitize_tsv_field(metadata.get("citation")):
+        return await generate_data_citation_for_metadata(
+            metadata,
+            access_date=access_date,
+            access_method=access_method,
+        )
+
+    identifier = _metadata_lookup_identifier(metadata)
+    if identifier:
+        return await generate_data_citation_for_identifier(
+            client,
+            identifier,
+            access_date=access_date,
+            access_method=access_method,
+        )
+
+    return await generate_data_citation_for_metadata(
+        metadata,
+        access_date=access_date,
+        access_method=access_method,
+    )
+
+
+async def generate_data_citations_for_metadata(
+    client: "ESSDiveClient",
+    metadata: Any,
+    *,
+    access_date: Optional[str] = None,
+    access_method: str = DEFAULT_ESSDIVE_ACCESS_METHOD,
+) -> tuple[List[str], List[str]]:
+    """Generate one or more citations from package metadata or search/list results."""
+    entries = _metadata_citation_entries(metadata)
+    if not entries:
+        raise ValueError("metadata must be a package object, result list, or search response.")
+
+    is_search_response = isinstance(metadata, list) or (
+        isinstance(metadata, dict) and isinstance(metadata.get("result"), list)
+    )
+    citations: List[str] = []
+    warnings: List[str] = []
+
+    for item in entries:
+        if is_search_response:
+            citation, item_warnings = await generate_data_citation_for_search_item(
+                client,
+                item,
+                access_date=access_date,
+                access_method=access_method,
+            )
+        else:
+            citation, item_warnings = await generate_data_citation_for_metadata(
+                item,
+                access_date=access_date,
+                access_method=access_method,
+            )
+
+        citations.append(citation)
+        warnings.extend(item_warnings)
+
+    return citations, warnings
 
 
 async def generate_data_citation_for_identifier(
@@ -1663,12 +1823,89 @@ async def generate_data_citation_for_identifier(
         )
 
 
+async def generate_data_citations_for_identifiers(
+    client: "ESSDiveClient",
+    identifiers: List[str],
+    *,
+    dataset_metadata: Any = None,
+    access_date: Optional[str] = None,
+    access_method: str = DEFAULT_ESSDIVE_ACCESS_METHOD,
+) -> tuple[List[str], List[str]]:
+    """Generate citations for identifiers, reusing supplied metadata citations first."""
+    if not identifiers:
+        raise ValueError("ids must contain at least one identifier.")
+
+    metadata_index = _metadata_index_by_identifier(dataset_metadata)
+    citations: List[str] = []
+    warnings: List[str] = []
+
+    for identifier in identifiers:
+        item = None
+        for key in _identifier_lookup_keys(identifier):
+            item = metadata_index.get(key)
+            if item is not None:
+                break
+
+        if item is not None and sanitize_tsv_field(item.get("citation")):
+            citation, item_warnings = await generate_data_citation_for_metadata(
+                item,
+                access_date=access_date,
+                access_method=access_method,
+            )
+        else:
+            citation, item_warnings = await generate_data_citation_for_identifier(
+                client,
+                identifier,
+                access_date=access_date,
+                access_method=access_method,
+            )
+
+        citations.append(citation)
+        warnings.extend(item_warnings)
+
+    return citations, warnings
+
+
+async def generate_data_citations_for_search(
+    client: "ESSDiveClient",
+    *,
+    search_kwargs: Dict[str, Any],
+    local_filters: Optional[Dict[str, List[str]]] = None,
+    access_date: Optional[str] = None,
+    access_method: str = DEFAULT_ESSDIVE_ACCESS_METHOD,
+) -> tuple[List[str], List[str]]:
+    """Run a dataset search and return citations for the result page."""
+    result = await _execute_dataset_search_request(
+        client,
+        search_kwargs=search_kwargs,
+        local_filters=local_filters or {},
+    )
+    return await generate_data_citations_for_metadata(
+        client,
+        result,
+        access_date=access_date,
+        access_method=access_method,
+    )
+
+
 def _format_citation_output(citation: str, warnings: List[str]) -> str:
     """Render citation output with agent-visible warning lines."""
     if not warnings:
         return citation
     warning_text = "\n".join(f"WARNING: {warning}" for warning in warnings)
     return f"{warning_text}\n\n{citation}"
+
+
+def _format_citations_output(citations: List[str], warnings: List[str]) -> str:
+    """Render one or more citations with any agent-visible warnings."""
+    if not citations:
+        raise ValueError("No citations were generated.")
+
+    citation_text = "\n".join(citations)
+    if not warnings:
+        return citation_text
+    warning_text = "\n".join(f"WARNING: {warning}" for warning in warnings)
+    return f"{warning_text}\n\n{citation_text}"
 
 
 def _norm_header_key(h: str) -> str:
@@ -3330,7 +3567,19 @@ def main():
     )
     async def generate_data_citation(
         id: Optional[str] = None,
-        dataset_metadata: Optional[Dict[str, Any]] = None,
+        ids: Optional[List[str]] = None,
+        dataset_metadata: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
+        query: Optional[str] = None,
+        creator: Optional[str] = None,
+        provider_name: Optional[str] = None,
+        date_published: Optional[str] = None,
+        begin_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        keywords: Optional[Union[str, List[str]]] = None,
+        sort: Optional[str] = None,
+        cursor: Optional[str] = None,
+        row_start: Optional[int] = None,
+        page_size: Optional[int] = None,
         access_date: Optional[str] = None,
         access_method: str = DEFAULT_ESSDIVE_ACCESS_METHOD,
     ) -> str:
@@ -3338,37 +3587,123 @@ def main():
         Generate a consistent data citation.
 
         Provide either an ESS-DIVE dataset identifier/DOI in `id` or a package
-        metadata object such as the raw output from `get-dataset`. When `id` is
-        provided, this tool fetches current metadata from the ESS-DIVE API. If
-        `id` is a DOI outside ESS-DIVE, the tool warns and tries Crossref.
+        metadata object such as the raw output from `get-dataset`. You can also
+        provide `ids` for multiple identifiers, or pass the raw output from
+        `search-datasets`, `next-search-page`, or `previous-search-page` as
+        `dataset_metadata` to return citations for all result items. Existing
+        `citation` fields are reused when available; missing search-result
+        citations are filled by fetching `/packages/{identifier}`.
+
+        To generate citations directly from a dataset search page, provide
+        `query` and/or other search filters such as `provider_name`, `creator`,
+        `date_published`, `keywords`, `sort`, `cursor`, `row_start`, or
+        `page_size`.
+
+        When an identifier is a DOI outside ESS-DIVE, the tool warns and tries
+        Crossref.
 
         Args:
             id: ESS-DIVE dataset identifier or DOI to fetch before formatting
-            dataset_metadata: Raw package metadata to format without fetching
+            ids: ESS-DIVE dataset identifiers or DOIs to cite in order
+            dataset_metadata: Raw package metadata, search response, or result list
+            query: Search query text for citation extraction from a package list
+            creator: Filter search citations by dataset creator
+            provider_name: Filter search citations by dataset project/provider
+            date_published: Filter search citations by publication date
+            begin_date: Temporal coverage window start date
+            end_date: Temporal coverage window end date
+            keywords: Search citations for datasets with specific keywords
+            sort: Optional search sort string
+            cursor: Opaque cursor for a follow-up search page
+            row_start: Legacy search row number to start on when not using cursor pagination
+            page_size: Number of search results to cite
             access_date: Optional access date in YYYY-MM-DD format; defaults to today
             access_method: Access phrase after "accessed via"; defaults to MCP/API usage
 
         Examples:
             generate-data-citation with id="doi:10.15485/3014404"
+            generate-data-citation with ids=["doi:10.15485/3014404", "ess-dive-example"]
+            generate-data-citation with query="BIONTE" and page_size=10
+            generate-data-citation with dataset_metadata=<raw search-datasets output>
             generate-data-citation with id="doi:10.15485/3014404" and access_date="2026-05-06"
 
         Returns:
-            A formatted ESS-DIVE data citation string
+            One or more formatted ESS-DIVE data citation strings
         """
         LOGGER.debug(
-            "Tool generate-data-citation called id=%s metadata_provided=%s access_date=%s",
+            "Tool generate-data-citation called id=%s ids_count=%s metadata_provided=%s query=%r cursor=%r page_size=%s access_date=%s",
             id,
+            len(ids) if ids is not None else None,
             dataset_metadata is not None,
+            query,
+            cursor,
+            page_size,
             access_date,
         )
         try:
-            if dataset_metadata is not None:
-                citation, warnings = await generate_data_citation_for_metadata(
+            search_requested = any(
+                value is not None
+                for value in (
+                    query,
+                    creator,
+                    provider_name,
+                    date_published,
+                    begin_date,
+                    end_date,
+                    keywords,
+                    sort,
+                    cursor,
+                    row_start,
+                    page_size,
+                )
+            )
+
+            if ids is not None:
+                citations, warnings = await generate_data_citations_for_identifiers(
+                    client,
+                    ids,
+                    dataset_metadata=dataset_metadata,
+                    access_date=access_date,
+                    access_method=access_method,
+                )
+                return _format_citations_output(citations, warnings)
+            elif dataset_metadata is not None:
+                citations, warnings = await generate_data_citations_for_metadata(
+                    client,
                     dataset_metadata,
                     access_date=access_date,
                     access_method=access_method,
                 )
-                return _format_citation_output(citation, warnings)
+                return _format_citations_output(citations, warnings)
+            elif search_requested:
+                keywords_list = None
+                if keywords:
+                    if isinstance(keywords, str):
+                        keywords_list = [keywords]
+                    else:
+                        keywords_list = keywords
+
+                search_kwargs = {
+                    "row_start": row_start,
+                    "page_size": page_size,
+                    "cursor": cursor,
+                    "is_public": _default_dataset_search_is_public(client.api_token),
+                    "creator": creator,
+                    "provider_name": provider_name,
+                    "text": query if query else None,
+                    "date_published": date_published,
+                    "begin_date": begin_date,
+                    "end_date": end_date,
+                    "keywords": keywords_list,
+                    "sort": sort,
+                }
+                citations, warnings = await generate_data_citations_for_search(
+                    client,
+                    search_kwargs=search_kwargs,
+                    access_date=access_date,
+                    access_method=access_method,
+                )
+                return _format_citations_output(citations, warnings)
             elif id:
                 citation, warnings = await generate_data_citation_for_identifier(
                     client,
@@ -3378,7 +3713,7 @@ def main():
                 )
                 return _format_citation_output(citation, warnings)
             else:
-                raise ValueError("Provide either id or dataset_metadata.")
+                raise ValueError("Provide id, ids, or dataset_metadata.")
         except Exception as exc:
             return _tool_error_response(
                 "generate-data-citation",
@@ -3387,7 +3722,18 @@ def main():
                 context=_context_without_none(
                     {
                         "id": id,
+                        "ids_count": len(ids) if ids is not None else None,
                         "dataset_metadata_provided": dataset_metadata is not None,
+                        "query": query,
+                        "creator": creator,
+                        "provider_name": provider_name,
+                        "date_published": date_published,
+                        "begin_date": begin_date,
+                        "end_date": end_date,
+                        "sort": sort,
+                        "cursor": cursor,
+                        "row_start": row_start,
+                        "page_size": page_size,
                         "access_date": access_date,
                         "access_method": access_method,
                     }

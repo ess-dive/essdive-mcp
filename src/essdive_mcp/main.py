@@ -249,6 +249,31 @@ def _context_without_none(context: Dict[str, Any]) -> Dict[str, Any]:
     return {key: value for key, value in context.items() if value is not None}
 
 
+def _mcp_context_session_id(ctx: Optional[Context]) -> str:
+    """Return a stable per-session key from the typed FastMCP context."""
+    if ctx is None:
+        raise ValueError("MCP request context is required for pagination state.")
+
+    session = ctx.session
+    for attr_name in ("session_id", "id"):
+        value = getattr(session, attr_name, None)
+        if value:
+            return str(value)
+
+    client_id = ctx.client_id
+    if client_id:
+        return f"client:{client_id}"
+
+    return f"session:{id(session)}"
+
+
+def _mcp_context_request_id(ctx: Optional[Context]) -> str:
+    """Return the request ID from the typed FastMCP context."""
+    if ctx is None:
+        raise ValueError("MCP request context is required for pagination state.")
+    return ctx.request_id
+
+
 def _default_dataset_search_is_public(api_token: Optional[str]) -> Optional[bool]:
     """Use public-only search anonymously; allow private matches when authenticated."""
     return True if not api_token else None
@@ -3390,8 +3415,8 @@ def main():
                 local_filters=local_filters,
             )
             pagination_store.save_search(
-                session_id=ctx.session_id,
-                state_id=ctx.request_id,
+                session_id=_mcp_context_session_id(ctx),
+                state_id=_mcp_context_request_id(ctx),
                 search_kwargs=search_kwargs,
                 local_filters=local_filters,
                 format_type=format,
@@ -3464,7 +3489,7 @@ def main():
         try:
             state_id, search_kwargs, local_filters, format_type = (
                 pagination_store.get_search_followup(
-                    ctx.session_id, "next", format_override=format
+                    _mcp_context_session_id(ctx), "next", format_override=format
                 )
             )
             result = await _execute_dataset_search_request(
@@ -3473,7 +3498,7 @@ def main():
                 local_filters=local_filters,
             )
             pagination_store.save_search(
-                session_id=ctx.session_id,
+                session_id=_mcp_context_session_id(ctx),
                 state_id=state_id,
                 search_kwargs=search_kwargs,
                 local_filters=local_filters,
@@ -3515,7 +3540,7 @@ def main():
         try:
             state_id, search_kwargs, local_filters, format_type = (
                 pagination_store.get_search_followup(
-                    ctx.session_id, "previous", format_override=format)
+                    _mcp_context_session_id(ctx), "previous", format_override=format)
             )
             result = await _execute_dataset_search_request(
                 client,
@@ -3523,7 +3548,7 @@ def main():
                 local_filters=local_filters,
             )
             pagination_store.save_search(
-                session_id=ctx.session_id,
+                session_id=_mcp_context_session_id(ctx),
                 state_id=state_id,
                 search_kwargs=search_kwargs,
                 local_filters=local_filters,
@@ -3841,8 +3866,8 @@ def main():
                 cursor=cursor,
             )
             pagination_store.save_versions(
-                session_id=ctx.session_id,
-                state_id=ctx.request_id,
+                session_id=_mcp_context_session_id(ctx),
+                state_id=_mcp_context_request_id(ctx),
                 identifier=id,
                 format_type=format,
                 result=result,
@@ -3891,14 +3916,14 @@ def main():
         try:
             state_id, identifier, cursor_value, format_type = (
                 pagination_store.get_versions_followup(
-                    ctx.session_id, "next", format_override=format)
+                    _mcp_context_session_id(ctx), "next", format_override=format)
             )
             result = await client.get_dataset_versions(
                 identifier,
                 cursor=cursor_value,
             )
             pagination_store.save_versions(
-                session_id=ctx.session_id,
+                session_id=_mcp_context_session_id(ctx),
                 state_id=state_id,
                 identifier=identifier,
                 format_type=format_type,
@@ -3940,14 +3965,14 @@ def main():
         try:
             state_id, identifier, cursor_value, format_type = (
                 pagination_store.get_versions_followup(
-                    ctx.session_id, "previous", format_override=format)
+                    _mcp_context_session_id(ctx), "previous", format_override=format)
             )
             result = await client.get_dataset_versions(
                 identifier,
                 cursor=cursor_value,
             )
             pagination_store.save_versions(
-                session_id=ctx.session_id,
+                session_id=_mcp_context_session_id(ctx),
                 state_id=state_id,
                 identifier=identifier,
                 format_type=format_type,

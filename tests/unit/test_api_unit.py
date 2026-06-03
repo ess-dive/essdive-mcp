@@ -575,7 +575,7 @@ class TestProjectReferences:
         portals = _load_projects()
 
         assert isinstance(portals, list)
-        assert len(portals) >= 5
+        assert len(portals) >= 400
         assert any(item["acronym"] == "CHESS" for item in portals)
 
     def test_search_projects_exact_acronym(self):
@@ -614,6 +614,16 @@ class TestProjectReferences:
         assert wade_result["results"][0]["name"] == "Watershed Dynamics and Evolution (WaDE) SFA"
         assert missing_water_result["count"] >= 1
         assert missing_water_result["results"][0]["name"] == "Seasonal Cycles Unravel Mysteries of Missing Mountain Water"
+
+    def test_search_projects_finds_mule_imported_entries(self):
+        """Mule registry imports should be discoverable by short name."""
+        result = search_projects("UT-GLOBUS", limit=5)
+
+        assert result["count"] >= 1
+        first = result["results"][0]
+        assert first["name"] == "UT-Global Building heights for Urban Studies (UT-GLOBUS)"
+        assert first["mule_id"] == "5312fdc3-f550-44eb-819f-47fa314b1b56"
+        assert first["mule_url"].endswith("/5312fdc3-f550-44eb-819f-47fa314b1b56/?format=json")
 
     def test_search_projects_without_query_lists_entries(self):
         """Listing without a query should return a bounded set of entries."""

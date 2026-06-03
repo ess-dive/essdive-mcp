@@ -98,4 +98,4 @@ coords-to-map-links with points=[[38.9219, -106.9490]] and zoom=12
 - When a user asks for citable sources, report dataset-level citations with `generate-data-citation` using the DOI from ESS-DeepDive results.
 - Use `ids` on `generate-data-citation` when citing multiple linked ESS-DIVE dataset DOIs from ESS-DeepDive results.
 - Do not cite individual ESS-DeepDive field records as if they were standalone datasets; cite the linked ESS-DIVE dataset DOI.
-- For project names, acronyms, aliases, and URLs, consult `../references/essdive_projects.yaml`.
+- For project names, acronyms, aliases, Mule IDs, and URLs, consult `../references/essdive_projects.yaml`. It combines curated portal entries with projects imported from the ESS-DIVE Mule project registry.

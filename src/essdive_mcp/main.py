@@ -1116,16 +1116,24 @@ def _load_projects() -> List[Dict[str, Any]]:
         if not isinstance(aliases, list):
             aliases = [str(aliases)]
 
-        normalized_projects.append(
-            {
-                "name": item.get("name"),
-                "acronym": item.get("acronym"),
-                "aliases": [str(alias) for alias in aliases if alias],
-                "short_description": item.get("short_description"),
-                "portal_url": item.get("portal_url"),
-                "url": item.get("url") or item.get("portal_url"),
-            }
-        )
+        project = {
+            "name": item.get("name"),
+            "acronym": item.get("acronym"),
+            "aliases": [str(alias) for alias in aliases if alias],
+            "short_description": item.get("short_description"),
+            "portal_url": item.get("portal_url"),
+            "url": item.get("url") or item.get("portal_url"),
+        }
+        for key in (
+            "mule_id",
+            "mule_url",
+            "sponsor_program_url",
+            "project_type_url",
+        ):
+            if item.get(key):
+                project[key] = item[key]
+
+        normalized_projects.append(project)
 
     return normalized_projects
 

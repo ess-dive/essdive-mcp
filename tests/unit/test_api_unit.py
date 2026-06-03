@@ -29,6 +29,9 @@ from essdive_mcp.main import (
     generate_crossref_data_citation,
     generate_data_citation_for_identifier,
     generate_data_citation_for_metadata,
+    generate_data_citations_for_identifiers,
+    generate_data_citations_for_metadata,
+    generate_data_citations_for_search,
     _format_citation_output,
     _fetch_crossref_work,
     _looks_like_doi_identifier,
@@ -1941,6 +1944,30 @@ class TestDataCitation:
             "on 2026-05-06"
         )
 
+    def test_generate_essdive_data_citation_prefers_existing_citation(self):
+        """API-provided citation strings should be reused when available."""
+        citation = generate_essdive_data_citation(
+            {
+                "citation": (
+                    "Curated A (2026): API formatted title. Example Project. "
+                    "Dataset. doi:10.15485/preferred"
+                ),
+                "dataset": {
+                    "@id": "doi:10.15485/reconstructed",
+                    "name": "Structured title",
+                    "datePublished": "2026",
+                    "creator": {"givenName": "Ada", "familyName": "Lovelace"},
+                },
+            },
+            access_date="2026-05-06",
+        )
+
+        assert citation == (
+            "Curated A (2026): API formatted title. Example Project, ESS-DIVE "
+            "repository. Dataset. doi:10.15485/preferred accessed via "
+            "ESS-DIVE API over ESS-DIVE MCP on 2026-05-06"
+        )
+
     def test_generate_essdive_data_citation_rejects_bad_access_date(self):
         """Access dates should use ISO date format for consistent exports."""
         with pytest.raises(ValueError, match="YYYY-MM-DD"):
@@ -2100,6 +2127,173 @@ class TestDataCitation:
             "Dataset. doi:10.15485/example accessed via ESS-DIVE API over "
             "ESS-DIVE MCP on 2026-05-06"
         )
+
+    @pytest.mark.asyncio
+    async def test_generate_data_citations_for_search_results_uses_existing_citations(self):
+        """Search/list results with citations should not trigger package lookups."""
+        client = Mock()
+        client.get_dataset = AsyncMock()
+
+        citations, warnings = await generate_data_citations_for_metadata(
+            client,
+            {
+                "total": 2,
+                "result": [
+                    {
+                        "id": "ess-dive-one",
+                        "citation": (
+                            "Lovelace A (2025): First dataset. Example Project. "
+                            "Dataset. doi:10.15485/one"
+                        ),
+                    },
+                    {
+                        "id": "ess-dive-two",
+                        "citation": (
+                            "Hopper G (2026): Second dataset. Example Project. "
+                            "Dataset. doi:10.15485/two"
+                        ),
+                    },
+                ],
+            },
+            access_date="2026-05-06",
+        )
+
+        client.get_dataset.assert_not_called()
+        assert warnings == []
+        assert citations == [
+            (
+                "Lovelace A (2025): First dataset. Example Project, ESS-DIVE "
+                "repository. Dataset. doi:10.15485/one accessed via ESS-DIVE "
+                "API over ESS-DIVE MCP on 2026-05-06"
+            ),
+            (
+                "Hopper G (2026): Second dataset. Example Project, ESS-DIVE "
+                "repository. Dataset. doi:10.15485/two accessed via ESS-DIVE "
+                "API over ESS-DIVE MCP on 2026-05-06"
+            ),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_generate_data_citations_for_search_results_fetches_missing_citation(self):
+        """Search/list items without citations should be hydrated by package ID."""
+        client = Mock()
+        client.get_dataset = AsyncMock(
+            return_value={
+                "id": "ess-dive-missing",
+                "citation": (
+                    "Johnson K (2025): Hydrated dataset. Example Project. "
+                    "Dataset. doi:10.15485/hydrated"
+                ),
+            }
+        )
+
+        citations, warnings = await generate_data_citations_for_metadata(
+            client,
+            {"result": [{"id": "ess-dive-missing", "dataset": {"name": "Preview"}}]},
+            access_date="2026-05-06",
+        )
+
+        client.get_dataset.assert_awaited_once_with("ess-dive-missing")
+        assert warnings == []
+        assert citations == [
+            (
+                "Johnson K (2025): Hydrated dataset. Example Project, ESS-DIVE "
+                "repository. Dataset. doi:10.15485/hydrated accessed via "
+                "ESS-DIVE API over ESS-DIVE MCP on 2026-05-06"
+            )
+        ]
+
+    @pytest.mark.asyncio
+    async def test_generate_data_citations_for_identifiers_reuses_supplied_metadata(self):
+        """Batch identifier citations should reuse matching search-result citations."""
+        client = Mock()
+        client.get_dataset = AsyncMock(
+            return_value={
+                "id": "ess-dive-missing",
+                "citation": (
+                    "Hopper G (2026): Missing citation dataset. Example Project. "
+                    "Dataset. doi:10.15485/missing"
+                ),
+            }
+        )
+
+        citations, warnings = await generate_data_citations_for_identifiers(
+            client,
+            ["ess-dive-present", "ess-dive-missing"],
+            dataset_metadata={
+                "result": [
+                    {
+                        "id": "ess-dive-present",
+                        "citation": (
+                            "Lovelace A (2025): Present dataset. Example Project. "
+                            "Dataset. doi:10.15485/present"
+                        ),
+                    },
+                    {"id": "ess-dive-missing", "dataset": {"name": "Preview"}},
+                ]
+            },
+            access_date="2026-05-06",
+        )
+
+        client.get_dataset.assert_awaited_once_with("ess-dive-missing")
+        assert warnings == []
+        assert citations == [
+            (
+                "Lovelace A (2025): Present dataset. Example Project, ESS-DIVE "
+                "repository. Dataset. doi:10.15485/present accessed via "
+                "ESS-DIVE API over ESS-DIVE MCP on 2026-05-06"
+            ),
+            (
+                "Hopper G (2026): Missing citation dataset. Example Project, "
+                "ESS-DIVE repository. Dataset. doi:10.15485/missing accessed "
+                "via ESS-DIVE API over ESS-DIVE MCP on 2026-05-06"
+            ),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_generate_data_citations_for_search_uses_package_list_response(self):
+        """Search citation batches should reuse citations returned by listDatasets."""
+        client = Mock()
+        client.search_datasets = AsyncMock(
+            return_value={
+                "total": 1,
+                "result": [
+                    {
+                        "id": "ess-dive-search",
+                        "citation": (
+                            "Lovelace A (2025): Search dataset. Example Project. "
+                            "Dataset. doi:10.15485/search"
+                        ),
+                    }
+                ],
+            }
+        )
+        client.get_dataset = AsyncMock()
+
+        citations, warnings = await generate_data_citations_for_search(
+            client,
+            search_kwargs={
+                "text": "BIONTE",
+                "page_size": 10,
+                "is_public": True,
+            },
+            access_date="2026-05-06",
+        )
+
+        client.search_datasets.assert_awaited_once_with(
+            text="BIONTE",
+            page_size=10,
+            is_public=True,
+        )
+        client.get_dataset.assert_not_called()
+        assert warnings == []
+        assert citations == [
+            (
+                "Lovelace A (2025): Search dataset. Example Project, ESS-DIVE "
+                "repository. Dataset. doi:10.15485/search accessed via "
+                "ESS-DIVE API over ESS-DIVE MCP on 2026-05-06"
+            )
+        ]
 
     @pytest.mark.asyncio
     async def test_generate_data_citation_for_metadata_warns_for_non_essdive_doi(self):

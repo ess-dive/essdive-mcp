@@ -213,6 +213,29 @@ Use an explicit access date for reproducible exports or reports:
 generate-data-citation with id="doi:10.15485/3014404" and access_date="2026-05-06"
 ```
 
+Generate citations for a search result page without doing one metadata lookup
+per dataset:
+
+```
+generate-data-citation with query="BIONTE" and page_size=10 and access_date="2026-05-06"
+```
+
+If you already searched in raw mode, pass the raw result page to reuse its
+top-level `citation` fields:
+
+```
+search-datasets with query="BIONTE" and page_size=10 and format="raw"
+generate-data-citation with dataset_metadata=PASTE_RAW_SEARCH_RESULTS and access_date="2026-05-06"
+```
+
+For a stateful next or previous page, request raw output from the page tool and
+pass that whole response:
+
+```
+next-search-page with format="raw"
+generate-data-citation with dataset_metadata=PASTE_RAW_NEXT_PAGE_RESULTS and access_date="2026-05-06"
+```
+
 Check publication/workflow status for a dataset:
 
 ```
@@ -281,7 +304,10 @@ coords-to-map-links with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
 - `get-dataset-status` may require an ESS-DIVE API token and dataset access. If an anonymous call fails, explain that status is auth-gated.
 - `get-dataset` supports `format="raw"` when you need the exact response fields, including top-level `isPublic`.
 - Use `generate-data-citation` when the user asks how to cite a dataset or when an export/report should include an ESS-DIVE data citation.
-- `generate-data-citation` accepts an `id` or an already-fetched raw `dataset_metadata` object. Prefer passing `dataset_metadata` when the workflow already called `get-dataset` with `format="raw"`.
+- `generate-data-citation` accepts `id`, `ids`, direct search filters, or an already-fetched raw `dataset_metadata` object.
+- Prefer passing raw `dataset_metadata` when the workflow already called `get-dataset`, `search-datasets`, `next-search-page`, or `previous-search-page` with `format="raw"`.
+- The ESS-DIVE `/packages` search/list response and `/packages/{identifier}` response can include a top-level `citation` field. `generate-data-citation` reuses that string and only fetches `/packages/{identifier}` for search/list items missing `citation`.
+- When citing a result page, do not loop over each result ID unless the user specifically asks for per-ID handling; pass the raw result page or use search arguments on `generate-data-citation`.
 - Pass `access_date` when citation output must be reproducible; otherwise the MCP server uses its current date.
 - If `generate-data-citation` warns that a DOI is not from ESS-DIVE, preserve that warning in the final answer.
 - `page_size` max is 100.

@@ -60,6 +60,12 @@ Generate a data citation directly from a DOI or ESS-DIVE ID:
 generate-data-citation with id="doi:10.15485/3014404" and access_date="2026-05-06"
 ```
 
+Generate citations for multiple identifiers in one call:
+
+```
+generate-data-citation with ids=["doi:10.15485/3014404", "ess-dive-example-id"] and access_date="2026-05-06"
+```
+
 Look up a project acronym and its portal details:
 
 ```
@@ -78,6 +84,7 @@ coords-to-map-links with points=[[38.9219, -106.9490]] and zoom=12
 - Outputs return a normalized DOI format.
 - Prefer `generate-data-citation` when the user asks for a citable reference rather than just an identifier conversion.
 - `generate-data-citation` can fetch citation metadata directly from either a package ID or DOI, so do not add a separate conversion step unless the user also wants the converted identifier.
+- Use `ids` on `generate-data-citation` when the user gives a set of identifiers. If you also have raw search/list metadata for those datasets, pass it as `dataset_metadata` so the tool can reuse existing `citation` strings and only fetch missing entries.
 - If `generate-data-citation` warns that a DOI is not from ESS-DIVE, preserve that warning in the final answer.
 - For project names, acronyms, aliases, and URLs, consult `../references/essdive_projects.yaml`.
 

@@ -12,7 +12,6 @@ license = { text = "BSD-3-Clause" }
 dependencies = [
     "mcp>=1.6.0",
     "httpx>=0.24.0",
-    "fastmcp>=2.13.3",
     "requests>=2.28.0",
     "PyYAML>=6.0",
 ]

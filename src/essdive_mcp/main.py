@@ -80,8 +80,7 @@ import httpx
 from urllib.parse import quote
 from urllib.parse import quote as url_quote
 
-from fastmcp import FastMCP
-from fastmcp.server.context import Context
+from mcp.server.fastmcp import Context, FastMCP
 from essdive_mcp import projects as projects_module
 from essdive_mcp.projects import ESSDIVE_PROJECTS
 

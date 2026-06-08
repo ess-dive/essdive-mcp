@@ -1676,6 +1676,57 @@ class TestFormatResults:
         assert "Award: DOE Award #12345" in formatted
         assert "citation: Example dataset citation" in formatted
 
+    def test_format_results_summary_includes_provider_name(self):
+        """Summary format should surface the canonical providerName from results."""
+        client = ESSDiveClient()
+
+        results = {
+            "result": [
+                {
+                    "id": "ds1",
+                    "dataset": {
+                        "name": "Dataset 1",
+                        "datePublished": "2024-01-01",
+                        "providerName": "Watershed Function SFA",
+                    },
+                }
+            ],
+            "total": 1,
+        }
+
+        formatted = client.format_results(results, "summary")
+
+        assert "Provider: Watershed Function SFA" in formatted
+
+    def test_format_results_detailed_prefers_provider_name(self):
+        """Detailed format should use the canonical providerName when present."""
+        client = ESSDiveClient()
+
+        results = {
+            "result": [
+                {
+                    "id": "ds1",
+                    "dataset": {
+                        "name": "Dataset 1",
+                        "datePublished": "2024-01-01",
+                        "providerName": "River Corridor and Watershed Biogeochemistry SFA",
+                        # A full provider object should be ignored in favor of
+                        # the canonical providerName when both are present.
+                        "provider": {"name": "Some Other Program"},
+                    },
+                }
+            ],
+            "total": 1,
+        }
+
+        formatted = client.format_results(results, "detailed")
+
+        assert (
+            "Provider: River Corridor and Watershed Biogeochemistry SFA"
+            in formatted
+        )
+        assert "Some Other Program" not in formatted
+
     def test_format_results_pagination_note_mentions_previous_page(self):
         """Formatted search results should point agents to previous-page tool."""
         client = ESSDiveClient()
@@ -1912,6 +1963,31 @@ class TestDataCitation:
         assert citation == (
             "Breckheimer I ; Carroll E ; Chadwick K D ; O'Ryan D ; "
             "Worsham H M (2026): CHESS 2025: Field-collected vegetation "
+            "attributes and site photos. Watershed Function SFA, ESS-DIVE "
+            "repository. Dataset. doi:10.15485/3014404 accessed via "
+            "ESS-DIVE API over ESS-DIVE MCP on 2026-05-06"
+        )
+
+    def test_generate_essdive_data_citation_uses_provider_name_string(self):
+        """Search-result datasets expose providerName instead of a provider object."""
+        metadata = {
+            "id": "ess-dive-c867baa5f602eed-20260506T011608834",
+            "dataset": {
+                "@id": "doi:10.15485/3014404",
+                "name": "CHESS 2025: Field-collected vegetation attributes and site photos",
+                "datePublished": "2026-03-10",
+                "creator": [
+                    {"givenName": "Ian", "familyName": "Breckheimer"},
+                ],
+                "providerName": "Watershed Function SFA",
+            },
+        }
+
+        citation = generate_essdive_data_citation(
+            metadata, access_date="2026-05-06")
+
+        assert citation == (
+            "Breckheimer I (2026): CHESS 2025: Field-collected vegetation "
             "attributes and site photos. Watershed Function SFA, ESS-DIVE "
             "repository. Dataset. doi:10.15485/3014404 accessed via "
             "ESS-DIVE API over ESS-DIVE MCP on 2026-05-06"

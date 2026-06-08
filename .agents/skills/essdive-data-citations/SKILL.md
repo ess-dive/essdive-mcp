@@ -168,7 +168,9 @@ If the MCP server is unavailable, fetch search/list or dataset metadata from the
 ESS-DIVE API. Prefer the API-provided top-level `citation` field from
 `/packages` or `/packages/{identifier}` when present. Only construct the same
 citation shape from `dataset.creator`, `dataset.datePublished`, `dataset.name`,
-`dataset.provider.name`, and `dataset.@id` if the response has no `citation`:
+`dataset.provider.name` (or the `dataset.providerName` string returned by
+`/packages` search results), and `dataset.@id` if the response has no
+`citation`:
 
 ```bash
 curl -sG "https://api.ess-dive.lbl.gov/packages/doi%3A10.15485%2F3014404" \

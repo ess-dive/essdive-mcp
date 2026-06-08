@@ -81,6 +81,18 @@ canonical ESS-DIVE provider name before calling `search-datasets`. Examples:
 reference file to resolve acronyms, aliases, and spacing variants whenever
 there is ambiguity.
 
+Every search result now carries the canonical provider name as
+`dataset.providerName`, and `search-datasets` surfaces it on a `Provider:` line
+in both `summary` and `detailed` output. Use it to confirm which provider each
+result belongs to — you no longer need a per-dataset `get-dataset` lookup or to
+parse the citation string just to learn the provider.
+
+Because `provider_name` matching is tokenized, a partial or inexact value can
+return datasets from more than one provider (for example, `provider_name=watershed`
+also matches `River Corridor and Watershed Biogeochemistry SFA`). When the user
+wants datasets from a single provider, prefer the canonical name, then verify or
+filter results by their `dataset.providerName` and keep only the exact matches.
+
 Filter by temporal coverage:
 
 ```
@@ -326,6 +338,7 @@ coords-to-map-links with bbox=[38.9187, -106.9532, 38.9263, -106.9451]
 - Point search requires `lat`, `lon`, and `radius` together. Do not combine point search with `bbox`.
 - Native ESS-DIVE `/packages` filters include `query`/`text`, `creator`, `provider_name`, `date_published`, `begin_date`, `end_date`, `keywords`, `sort`, `bbox`, and `lat`/`lon`/`radius`.
 - For `provider_name`, prefer the canonical ESS-DIVE provider/project name rather than a shorthand or spacing variant. Normalize likely variants first, then pass the canonical name to `search-datasets`.
+- Search results include the canonical provider as `dataset.providerName` (shown on the `Provider:` line). Because matching is tokenized, an inexact `provider_name` can return multiple distinct providers; verify or filter results by `dataset.providerName` instead of issuing a `get-dataset` request per result.
 - Additional filters such as `creator_affiliation`, `variable_measured`, `measurement_technique`, `funder`, `license`, `alternate_name`, `editor`, `file_format`, `file_name`, and `file_url` are applied locally after the initial API search using full dataset metadata from `get-dataset`.
 - If you need very precise filtering on those local-only fields, start with a narrower native search first, then apply the local metadata filters.
 - Local metadata filtering only inspects the current API page, so increase `page_size` or adjust `row_start` if you want to scan more native matches.

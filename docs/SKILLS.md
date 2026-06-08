@@ -71,6 +71,12 @@ name before using `provider_name`. For example, `Watershed SFA` or
 The shared project reference combines curated portal entries with additional
 projects imported from the ESS-DIVE Mule project registry.
 
+Search results now expose the canonical provider as `dataset.providerName`, which
+`search-datasets` surfaces on a `Provider:` line. Agents can use it to verify which
+provider each result belongs to and to filter out non-matching providers when an
+inexact `provider_name` returns datasets from more than one provider, instead of
+fetching each dataset record individually.
+
 What that enables in practice:
 
 - start with a broad search like `East River`
@@ -158,6 +164,7 @@ To remove them:
 - `Use the essdive-datasets skill to search for East River datasets and then keep only results with Lawrence Berkeley Lab creator affiliations.`
 - `Use the essdive-datasets skill to search for East River datasets and then keep only results where variableMeasured includes streamflow.`
 - `Use the essdive-datasets skill to normalize "Watershed SFA" to the canonical provider name and search for matching datasets.`
+- `Use the essdive-datasets skill to search provider_name="watershed" and keep only results whose providerName is exactly "Watershed Function SFA".`
 
 ### `essdive-identifiers`
 

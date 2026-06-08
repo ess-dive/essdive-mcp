@@ -443,6 +443,21 @@ def _organization_search_strings(organization: Dict[str, Any]) -> List[str]:
     return values
 
 
+def _search_result_provider_name(ds_data: Any) -> Optional[str]:
+    """Return the canonical ``providerName`` string from a dataset record.
+
+    ESS-DIVE dataset-search results expose the canonical provider/organization
+    name directly as ``dataset.providerName`` (a plain string). This is the name
+    that matched the ``providerName`` query, so it lets callers verify which
+    provider each result actually belongs to without fetching the full record.
+    """
+    if isinstance(ds_data, dict):
+        name = str(ds_data.get("providerName") or "").strip()
+        if name:
+            return name
+    return None
+
+
 def _summarize_provider(provider: Any) -> List[str]:
     """Return readable provider summaries from dataset metadata."""
     summaries: List[str] = []
@@ -1558,6 +1573,10 @@ def generate_essdive_data_citation(
         provider_name = _citation_provider_name(dataset.get("provider"))
         if not provider_name:
             provider_name = _citation_provider_name(dataset.get("publisher"))
+        if not provider_name:
+            # Dataset-search results expose the canonical provider as a plain
+            # ``providerName`` string instead of a full ``provider`` object.
+            provider_name = sanitize_tsv_field(dataset.get("providerName"))
         repository_clause = "ESS-DIVE repository"
         if provider_name:
             repository_clause = f"{provider_name}, {repository_clause}"
@@ -2466,6 +2485,9 @@ class ESSDiveClient:
                 if _should_show_is_public(dataset.get("isPublic"), results.get("user")):
                     summary += f"   isPublic: {dataset.get('isPublic')}\n"
                 summary += f"   Published: {ds_data.get('datePublished', 'Unknown')}\n"
+                provider_name = _search_result_provider_name(ds_data)
+                if provider_name:
+                    summary += f"   Provider: {provider_name}\n"
                 links = [
                     _markdown_link("View dataset", dataset.get("viewUrl")),
                     _markdown_link("API record", dataset.get("url")),
@@ -2566,9 +2588,13 @@ class ESSDiveClient:
                 if license_value:
                     detailed += f"   License: {license_value}\n"
 
-                providers = _summarize_provider(ds_data.get("provider"))
-                if providers:
-                    detailed += f"   Provider: {'; '.join(providers)}\n"
+                provider_name = _search_result_provider_name(ds_data)
+                if provider_name:
+                    detailed += f"   Provider: {provider_name}\n"
+                else:
+                    providers = _summarize_provider(ds_data.get("provider"))
+                    if providers:
+                        detailed += f"   Provider: {'; '.join(providers)}\n"
 
                 awards = _as_string_list(ds_data.get("award"))
                 if awards:
@@ -2740,6 +2766,10 @@ class ESSDiveClient:
             content += f"{license_value}\n\n"
 
         providers = _summarize_provider(dataset.get("provider"))
+        if not providers:
+            provider_name = _search_result_provider_name(dataset)
+            if provider_name:
+                providers = [provider_name]
         if providers:
             content += "## Provider\n"
             for provider in providers:

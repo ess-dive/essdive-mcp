@@ -3320,18 +3320,32 @@ def main():
     client = ESSDiveClient(api_token=api_token)
     pagination_store = PaginationStateStore()
 
+    # stdio and streamable HTTP enter the lifespan once for the whole process,
+    # but SSE enters it again per client connection. Refcount it so a single
+    # client hanging up neither wipes state its peers still own nor leaves a
+    # second pruning task running behind it.
+    live_connections = 0
+    cleanup_task: Optional[asyncio.Task] = None
+
     @asynccontextmanager
     async def server_lifespan(_: MCPServer):
-        cleanup_task = asyncio.create_task(
-            _run_pagination_state_cleanup(pagination_store)
-        )
+        nonlocal live_connections, cleanup_task
+
+        if live_connections == 0:
+            cleanup_task = asyncio.create_task(
+                _run_pagination_state_cleanup(pagination_store)
+            )
+        live_connections += 1
         try:
             yield {}
         finally:
-            cleanup_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await cleanup_task
-            pagination_store.clear_all()
+            live_connections -= 1
+            if live_connections == 0 and cleanup_task is not None:
+                cleanup_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await cleanup_task
+                cleanup_task = None
+                pagination_store.clear_all()
 
     # Create the MCP server
     server = MCPServer("essdive_mcp", lifespan=server_lifespan)

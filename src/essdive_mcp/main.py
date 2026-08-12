@@ -80,6 +80,7 @@ from typing import Dict, List, Optional, Any, Union, Awaitable, Callable, TypeVa
 import httpx
 from urllib.parse import quote
 from urllib.parse import quote as url_quote
+from uuid import uuid4
 
 from mcp.server.mcpserver import Context, MCPServer
 from essdive_mcp import projects as projects_module
@@ -107,6 +108,10 @@ PROJECTS_SOURCE_PATH = str(Path(projects_module.__file__).resolve())
 # belongs to the same logical session; HTTP transports may not, so `main()`
 # only sets this for stdio.
 _SINGLE_CLIENT_SESSION_KEY: Optional[str] = None
+
+# Whether the transport validates the session id it hands us. `main()` clears
+# this under --stateless-http, where the session id is passed through unchecked.
+_TRUST_TRANSPORT_SESSION_ID: bool = True
 
 
 def _is_truthy(value: Optional[str]) -> bool:
@@ -256,6 +261,28 @@ def _context_without_none(context: Dict[str, Any]) -> Dict[str, Any]:
     return {key: value for key, value in context.items() if value is not None}
 
 
+def _transport_session_id(ctx: Context) -> Optional[str]:
+    """Return the session id the transport vouched for on this request, if any."""
+    if not _TRUST_TRANSPORT_SESSION_ID:
+        return None
+
+    # Streamable HTTP: the session manager rejects any id it did not issue
+    # before the request reaches a tool, so the echoed header is trustworthy.
+    headers = ctx.headers or {}
+    session_id = headers.get("mcp-session-id")
+    if session_id:
+        return session_id
+
+    # SSE carries its session in a query parameter instead, likewise checked
+    # against the transport's live sessions before the message is dispatched.
+    query_params = getattr(getattr(ctx.request_context, "request", None),
+                           "query_params", None)
+    if query_params:
+        return query_params.get("session_id")
+
+    return None
+
+
 def _mcp_context_session_id(ctx: Optional[Context]) -> str:
     """Return a stable per-session key from the typed MCP server context."""
     if ctx is None:
@@ -268,12 +295,10 @@ def _mcp_context_session_id(ctx: Optional[Context]) -> str:
             return str(value)
 
     # MCP 2026-07-28 builds a fresh session object per request, so identity has
-    # to come off the transport instead: HTTP clients that negotiated a session
-    # echo it back in the mcp-session-id header on every call.
-    headers = ctx.headers or {}
-    http_session_id = headers.get("mcp-session-id")
-    if http_session_id:
-        return f"http:{http_session_id}"
+    # to come off the transport instead.
+    transport_session_id = _transport_session_id(ctx)
+    if transport_session_id:
+        return f"transport:{transport_session_id}"
 
     # MCPServer dropped the `Context.client_id` shortcut FastMCP 1.0 had, so
     # read the same value straight off the (open) request metadata.
@@ -285,9 +310,12 @@ def _mcp_context_session_id(ctx: Optional[Context]) -> str:
     if _SINGLE_CLIENT_SESSION_KEY is not None:
         return _SINGLE_CLIENT_SESSION_KEY
 
-    # Sessionless HTTP request: fall back to a per-request key so pagination
-    # state is never shared between callers that we cannot tell apart.
-    return f"session:{id(session)}"
+    # Nothing identifies this caller. Anything derived from the request objects
+    # would be recycled along with them - CPython reuses freed addresses, so
+    # `id(session)` collides within a few dozen calls - and a collision here
+    # hands one caller another caller's search chain. Mint a fresh key instead:
+    # pagination cannot chain, but it can never cross over either.
+    return f"unidentified:{uuid4()}"
 
 
 def _mcp_context_request_id(ctx: Optional[Context]) -> str:
@@ -3255,7 +3283,7 @@ def _resolve_startup_api_token(
 
 def main():
     """Main entry point for the MCP server."""
-    global _SINGLE_CLIENT_SESSION_KEY
+    global _SINGLE_CLIENT_SESSION_KEY, _TRUST_TRANSPORT_SESSION_ID
 
     parser = _build_arg_parser()
     args = parser.parse_args()
@@ -3263,6 +3291,9 @@ def main():
     _SINGLE_CLIENT_SESSION_KEY = (
         "stdio" if runtime_config.transport == "stdio" else None
     )
+    # Stateless mode makes the transport pass the session id through without
+    # checking it, leaving a header the caller picks as the state partition key.
+    _TRUST_TRANSPORT_SESSION_ID = not runtime_config.stateless_http
 
     verbose_mode = args.verbose or _is_truthy(os.getenv("ESSDIVE_MCP_VERBOSE"))
     _configure_logging(verbose_mode)

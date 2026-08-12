@@ -4594,13 +4594,20 @@ def main():
     # Run the server
     if runtime_config.transport == "stdio":
         asyncio.run(server.run_stdio_async())
-    else:
+    elif runtime_config.transport == "sse":
         asyncio.run(
-            server.run_http_async(
-                transport=runtime_config.transport,
+            server.run_sse_async(
                 host=runtime_config.host,
                 port=runtime_config.port,
-                path=runtime_config.path,
+                sse_path=runtime_config.path,
+            )
+        )
+    else:
+        asyncio.run(
+            server.run_streamable_http_async(
+                host=runtime_config.host,
+                port=runtime_config.port,
+                streamable_http_path=runtime_config.path,
                 json_response=runtime_config.json_response,
                 stateless_http=runtime_config.stateless_http,
             )

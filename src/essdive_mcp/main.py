@@ -102,6 +102,12 @@ CROSSREF_USER_AGENT = (
 T = TypeVar("T")
 PROJECTS_SOURCE_PATH = str(Path(projects_module.__file__).resolve())
 
+# Pagination-state key used when the transport carries no session identity of
+# its own. stdio serves exactly one client per process, so every request there
+# belongs to the same logical session; HTTP transports may not, so `main()`
+# only sets this for stdio.
+_SINGLE_CLIENT_SESSION_KEY: Optional[str] = None
+
 
 def _is_truthy(value: Optional[str]) -> bool:
     """Return True when a string value represents an enabled boolean."""
@@ -261,6 +267,14 @@ def _mcp_context_session_id(ctx: Optional[Context]) -> str:
         if value:
             return str(value)
 
+    # MCP 2026-07-28 builds a fresh session object per request, so identity has
+    # to come off the transport instead: HTTP clients that negotiated a session
+    # echo it back in the mcp-session-id header on every call.
+    headers = ctx.headers or {}
+    http_session_id = headers.get("mcp-session-id")
+    if http_session_id:
+        return f"http:{http_session_id}"
+
     # MCPServer dropped the `Context.client_id` shortcut FastMCP 1.0 had, so
     # read the same value straight off the (open) request metadata.
     meta = getattr(ctx.request_context, "meta", None)
@@ -268,6 +282,11 @@ def _mcp_context_session_id(ctx: Optional[Context]) -> str:
     if client_id:
         return f"client:{client_id}"
 
+    if _SINGLE_CLIENT_SESSION_KEY is not None:
+        return _SINGLE_CLIENT_SESSION_KEY
+
+    # Sessionless HTTP request: fall back to a per-request key so pagination
+    # state is never shared between callers that we cannot tell apart.
     return f"session:{id(session)}"
 
 
@@ -3236,9 +3255,14 @@ def _resolve_startup_api_token(
 
 def main():
     """Main entry point for the MCP server."""
+    global _SINGLE_CLIENT_SESSION_KEY
+
     parser = _build_arg_parser()
     args = parser.parse_args()
     runtime_config = _resolve_runtime_config(args)
+    _SINGLE_CLIENT_SESSION_KEY = (
+        "stdio" if runtime_config.transport == "stdio" else None
+    )
 
     verbose_mode = args.verbose or _is_truthy(os.getenv("ESSDIVE_MCP_VERBOSE"))
     _configure_logging(verbose_mode)

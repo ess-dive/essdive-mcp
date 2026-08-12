@@ -66,6 +66,7 @@ import csv
 import re
 import logging
 import traceback
+from collections.abc import Mapping
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import date
@@ -80,7 +81,7 @@ import httpx
 from urllib.parse import quote
 from urllib.parse import quote as url_quote
 
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.mcpserver import Context, MCPServer
 from essdive_mcp import projects as projects_module
 from essdive_mcp.projects import ESSDIVE_PROJECTS
 
@@ -250,7 +251,7 @@ def _context_without_none(context: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _mcp_context_session_id(ctx: Optional[Context]) -> str:
-    """Return a stable per-session key from the typed FastMCP context."""
+    """Return a stable per-session key from the typed MCP server context."""
     if ctx is None:
         raise ValueError("MCP request context is required for pagination state.")
 
@@ -260,7 +261,10 @@ def _mcp_context_session_id(ctx: Optional[Context]) -> str:
         if value:
             return str(value)
 
-    client_id = ctx.client_id
+    # MCPServer dropped the `Context.client_id` shortcut FastMCP 1.0 had, so
+    # read the same value straight off the (open) request metadata.
+    meta = getattr(ctx.request_context, "meta", None)
+    client_id = meta.get("client_id") if isinstance(meta, Mapping) else None
     if client_id:
         return f"client:{client_id}"
 
@@ -268,7 +272,7 @@ def _mcp_context_session_id(ctx: Optional[Context]) -> str:
 
 
 def _mcp_context_request_id(ctx: Optional[Context]) -> str:
-    """Return the request ID from the typed FastMCP context."""
+    """Return the request ID from the typed MCP server context."""
     if ctx is None:
         raise ValueError("MCP request context is required for pagination state.")
     return ctx.request_id
@@ -3262,7 +3266,7 @@ def main():
     pagination_store = PaginationStateStore()
 
     @asynccontextmanager
-    async def server_lifespan(_: FastMCP):
+    async def server_lifespan(_: MCPServer):
         cleanup_task = asyncio.create_task(
             _run_pagination_state_cleanup(pagination_store)
         )
@@ -3274,8 +3278,8 @@ def main():
                 await cleanup_task
             pagination_store.clear_all()
 
-    # Create a FastMCP server
-    server = FastMCP("essdive_mcp", lifespan=server_lifespan)
+    # Create the MCP server
+    server = MCPServer("essdive_mcp", lifespan=server_lifespan)
 
     # Register tool functions
     @server.tool(

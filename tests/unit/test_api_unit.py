@@ -1,6 +1,8 @@
 """Tests for ESS-DIVE MCP Server."""
 
+from essdive_mcp import main as main_module
 from essdive_mcp.main import (
+    _mcp_context_session_id,
     ESSDiveClient,
     get_api_key,
     parse_flmd_file,
@@ -40,6 +42,7 @@ import pytest
 import os
 import requests
 import httpx
+from types import SimpleNamespace
 from unittest.mock import Mock, patch, AsyncMock
 
 
@@ -227,6 +230,82 @@ class TestServerRuntimeConfig:
         assert config.host == "127.0.0.2"
         assert config.port == 8123
         assert config.path == "/custom"
+
+
+class TestMcpContextSessionId:
+    """Tests for the pagination session key derived from the MCP request context."""
+
+    @staticmethod
+    def _ctx(session=None, headers=None, meta=None, query_params=None):
+        """Build a stand-in for the MCP server Context with the fields we read."""
+        return SimpleNamespace(
+            session=session if session is not None else object(),
+            headers=headers,
+            request_context=SimpleNamespace(
+                meta=meta,
+                request=SimpleNamespace(query_params=query_params),
+            ),
+        )
+
+    def test_requires_a_context(self):
+        """Pagination cannot be scoped without a request context."""
+        with pytest.raises(ValueError):
+            _mcp_context_session_id(None)
+
+    def test_prefers_an_explicit_session_id(self):
+        """A transport-provided session id wins over every fallback."""
+        ctx = self._ctx(
+            session=SimpleNamespace(session_id="abc"),
+            headers={"mcp-session-id": "header-id"},
+        )
+
+        assert _mcp_context_session_id(ctx) == "abc"
+
+    def test_falls_back_to_the_streamable_http_session_header(self):
+        """MCP 2026-07-28 rebuilds the session per request, so use the header."""
+        ctx = self._ctx(headers={"mcp-session-id": "header-id"})
+
+        assert _mcp_context_session_id(ctx) == "transport:header-id"
+
+    def test_falls_back_to_the_sse_session_query_param(self):
+        """SSE identifies its session in the message URL, not in a header."""
+        ctx = self._ctx(query_params={"session_id": "sse-id"})
+
+        assert _mcp_context_session_id(ctx) == "transport:sse-id"
+
+    def test_ignores_the_session_id_when_the_transport_skips_validation(self):
+        """Under --stateless-http the id is caller-chosen, so it cannot partition state."""
+        ctx = self._ctx(headers={"mcp-session-id": "someone-elses-session"})
+
+        with patch.object(main_module, "_TRUST_TRANSPORT_SESSION_ID", False), \
+                patch.object(main_module, "_SINGLE_CLIENT_SESSION_KEY", None):
+            assert not _mcp_context_session_id(ctx).endswith("someone-elses-session")
+
+    def test_falls_back_to_request_meta_client_id(self):
+        """A client id in the open request metadata still scopes pagination."""
+        ctx = self._ctx(meta={"client_id": "client-9"})
+
+        assert _mcp_context_session_id(ctx) == "client:client-9"
+
+    def test_uses_the_single_client_key_on_stdio(self):
+        """One stdio process serves one client, so all its requests share a key."""
+        ctx = self._ctx()
+
+        with patch.object(main_module, "_SINGLE_CLIENT_SESSION_KEY", "stdio"):
+            assert _mcp_context_session_id(ctx) == "stdio"
+
+    def test_unidentified_callers_never_share_a_key(self):
+        """Keys must not be derived from request objects: CPython recycles their ids.
+
+        Both calls pass the same context, which is the worst case a real caller
+        can produce - two requests whose session objects landed on one address.
+        """
+        ctx = self._ctx()
+
+        with patch.object(main_module, "_SINGLE_CLIENT_SESSION_KEY", None):
+            keys = {_mcp_context_session_id(ctx) for _ in range(50)}
+
+        assert len(keys) == 50
 
 
 class TestPaginationStateStore:

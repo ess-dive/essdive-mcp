@@ -66,6 +66,7 @@ import csv
 import re
 import logging
 import traceback
+from collections.abc import Mapping
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from datetime import date
@@ -79,8 +80,9 @@ from typing import Dict, List, Optional, Any, Union, Awaitable, Callable, TypeVa
 import httpx
 from urllib.parse import quote
 from urllib.parse import quote as url_quote
+from uuid import uuid4
 
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.mcpserver import Context, MCPServer
 from essdive_mcp import projects as projects_module
 from essdive_mcp.projects import ESSDIVE_PROJECTS
 
@@ -100,6 +102,16 @@ CROSSREF_USER_AGENT = (
 )
 T = TypeVar("T")
 PROJECTS_SOURCE_PATH = str(Path(projects_module.__file__).resolve())
+
+# Pagination-state key used when the transport carries no session identity of
+# its own. stdio serves exactly one client per process, so every request there
+# belongs to the same logical session; HTTP transports may not, so `main()`
+# only sets this for stdio.
+_SINGLE_CLIENT_SESSION_KEY: Optional[str] = None
+
+# Whether the transport validates the session id it hands us. `main()` clears
+# this under --stateless-http, where the session id is passed through unchecked.
+_TRUST_TRANSPORT_SESSION_ID: bool = True
 
 
 def _is_truthy(value: Optional[str]) -> bool:
@@ -249,8 +261,30 @@ def _context_without_none(context: Dict[str, Any]) -> Dict[str, Any]:
     return {key: value for key, value in context.items() if value is not None}
 
 
+def _transport_session_id(ctx: Context) -> Optional[str]:
+    """Return the session id the transport vouched for on this request, if any."""
+    if not _TRUST_TRANSPORT_SESSION_ID:
+        return None
+
+    # Streamable HTTP: the session manager rejects any id it did not issue
+    # before the request reaches a tool, so the echoed header is trustworthy.
+    headers = ctx.headers or {}
+    session_id = headers.get("mcp-session-id")
+    if session_id:
+        return session_id
+
+    # SSE carries its session in a query parameter instead, likewise checked
+    # against the transport's live sessions before the message is dispatched.
+    query_params = getattr(getattr(ctx.request_context, "request", None),
+                           "query_params", None)
+    if query_params:
+        return query_params.get("session_id")
+
+    return None
+
+
 def _mcp_context_session_id(ctx: Optional[Context]) -> str:
-    """Return a stable per-session key from the typed FastMCP context."""
+    """Return a stable per-session key from the typed MCP server context."""
     if ctx is None:
         raise ValueError("MCP request context is required for pagination state.")
 
@@ -260,15 +294,32 @@ def _mcp_context_session_id(ctx: Optional[Context]) -> str:
         if value:
             return str(value)
 
-    client_id = ctx.client_id
+    # MCP 2026-07-28 builds a fresh session object per request, so identity has
+    # to come off the transport instead.
+    transport_session_id = _transport_session_id(ctx)
+    if transport_session_id:
+        return f"transport:{transport_session_id}"
+
+    # MCPServer dropped the `Context.client_id` shortcut FastMCP 1.0 had, so
+    # read the same value straight off the (open) request metadata.
+    meta = getattr(ctx.request_context, "meta", None)
+    client_id = meta.get("client_id") if isinstance(meta, Mapping) else None
     if client_id:
         return f"client:{client_id}"
 
-    return f"session:{id(session)}"
+    if _SINGLE_CLIENT_SESSION_KEY is not None:
+        return _SINGLE_CLIENT_SESSION_KEY
+
+    # Nothing identifies this caller. Anything derived from the request objects
+    # would be recycled along with them - CPython reuses freed addresses, so
+    # `id(session)` collides within a few dozen calls - and a collision here
+    # hands one caller another caller's search chain. Mint a fresh key instead:
+    # pagination cannot chain, but it can never cross over either.
+    return f"unidentified:{uuid4()}"
 
 
 def _mcp_context_request_id(ctx: Optional[Context]) -> str:
-    """Return the request ID from the typed FastMCP context."""
+    """Return the request ID from the typed MCP server context."""
     if ctx is None:
         raise ValueError("MCP request context is required for pagination state.")
     return ctx.request_id
@@ -3232,9 +3283,17 @@ def _resolve_startup_api_token(
 
 def main():
     """Main entry point for the MCP server."""
+    global _SINGLE_CLIENT_SESSION_KEY, _TRUST_TRANSPORT_SESSION_ID
+
     parser = _build_arg_parser()
     args = parser.parse_args()
     runtime_config = _resolve_runtime_config(args)
+    _SINGLE_CLIENT_SESSION_KEY = (
+        "stdio" if runtime_config.transport == "stdio" else None
+    )
+    # Stateless mode makes the transport pass the session id through without
+    # checking it, leaving a header the caller picks as the state partition key.
+    _TRUST_TRANSPORT_SESSION_ID = not runtime_config.stateless_http
 
     verbose_mode = args.verbose or _is_truthy(os.getenv("ESSDIVE_MCP_VERBOSE"))
     _configure_logging(verbose_mode)
@@ -3261,21 +3320,35 @@ def main():
     client = ESSDiveClient(api_token=api_token)
     pagination_store = PaginationStateStore()
 
+    # stdio and streamable HTTP enter the lifespan once for the whole process,
+    # but SSE enters it again per client connection. Refcount it so a single
+    # client hanging up neither wipes state its peers still own nor leaves a
+    # second pruning task running behind it.
+    live_connections = 0
+    cleanup_task: Optional[asyncio.Task] = None
+
     @asynccontextmanager
-    async def server_lifespan(_: FastMCP):
-        cleanup_task = asyncio.create_task(
-            _run_pagination_state_cleanup(pagination_store)
-        )
+    async def server_lifespan(_: MCPServer):
+        nonlocal live_connections, cleanup_task
+
+        if live_connections == 0:
+            cleanup_task = asyncio.create_task(
+                _run_pagination_state_cleanup(pagination_store)
+            )
+        live_connections += 1
         try:
             yield {}
         finally:
-            cleanup_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await cleanup_task
-            pagination_store.clear_all()
+            live_connections -= 1
+            if live_connections == 0 and cleanup_task is not None:
+                cleanup_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await cleanup_task
+                cleanup_task = None
+                pagination_store.clear_all()
 
-    # Create a FastMCP server
-    server = FastMCP("essdive_mcp", lifespan=server_lifespan)
+    # Create the MCP server
+    server = MCPServer("essdive_mcp", lifespan=server_lifespan)
 
     # Register tool functions
     @server.tool(
@@ -4590,13 +4663,20 @@ def main():
     # Run the server
     if runtime_config.transport == "stdio":
         asyncio.run(server.run_stdio_async())
-    else:
+    elif runtime_config.transport == "sse":
         asyncio.run(
-            server.run_http_async(
-                transport=runtime_config.transport,
+            server.run_sse_async(
                 host=runtime_config.host,
                 port=runtime_config.port,
-                path=runtime_config.path,
+                sse_path=runtime_config.path,
+            )
+        )
+    else:
+        asyncio.run(
+            server.run_streamable_http_async(
+                host=runtime_config.host,
+                port=runtime_config.port,
+                streamable_http_path=runtime_config.path,
                 json_response=runtime_config.json_response,
                 stateless_http=runtime_config.stateless_http,
             )

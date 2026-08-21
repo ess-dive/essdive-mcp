@@ -393,28 +393,30 @@ This is a good option for users who want a familiar GUI instead of a terminal-on
 
 GitHub's Copilot MCP documentation says Visual Studio Code 1.99 or later is required.
 
-Create a project-scoped MCP config at `.vscode/mcp.json`:
+Command-Shift-P -> MCP: Open User Configuration 
+
+(Or edit the file at "/Users/YOURUSERNAME/Library/Application Support/Code/User/mcp.json" on a mac)
 
 ```json
 {
-  "servers": {
-    "essdive-mcp": {
-      "type": "stdio",
-      "command": "uv",
-      "args": ["run", "essdive-mcp"]
-    }
-  }
+    "servers": {
+        "essdive-mcp": {
+            "type": "stdio",
+            "command": "uvx",
+            "args": [
+                "--from",
+                "git+https://github.com/ess-dive/essdive-mcp",
+                "essdive-mcp"
+            ]
+        }
+    },
+    "inputs": []
 }
 ```
 
 Then:
 
-1. Open this repository in VS Code.
-2. Open `.vscode/mcp.json`.
-3. Click `Start` above the server entry.
-4. Open Copilot Chat.
-5. Switch the chat mode to `Agent`.
-6. Open the tools list and confirm `essdive-mcp` is available.
+Restart VS Code and enable ESS-DIVE MCP in Copilot "Configure Tools" 
 
 If you need authenticated/private-data access, you can add a token with an environment variable instead:
 
@@ -423,8 +425,12 @@ If you need authenticated/private-data access, you can add a token with an envir
   "servers": {
     "essdive-mcp": {
       "type": "stdio",
-      "command": "uv",
-      "args": ["run", "essdive-mcp"],
+      "command": "uvx",
+            "args": [
+                "--from",
+                "git+https://github.com/ess-dive/essdive-mcp",
+                "essdive-mcp"
+            ]
       "env": {
         "ESSDIVE_API_TOKEN": "YOUR_ESS_DIVE_TOKEN_HERE"
       }

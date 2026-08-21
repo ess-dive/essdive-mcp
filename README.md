@@ -346,7 +346,7 @@ This script:
 - starts the MCP server
 - uses `essdivetoken` automatically if that file exists
 
-If you prefer the manual command:
+If you prefer the manual command (from within the cloned repository):
 
 ```bash
 uv run essdive-mcp
@@ -356,6 +356,18 @@ If you want authenticated/private-data access, you can still provide a token exp
 
 ```bash
 uv run essdive-mcp --token-file ./essdivetoken
+```
+
+If you did not clone the repository and want to run directly from GitHub instead:
+
+```bash
+uvx --from git+https://github.com/ess-dive/essdive-mcp essdive-mcp
+```
+
+With a token:
+
+```bash
+uvx --from git+https://github.com/ess-dive/essdive-mcp essdive-mcp --token-file ./essdivetoken
 ```
 
 What should happen:
@@ -372,13 +384,13 @@ Choose one of the following clients to use with the ESS-DIVE MCP server. Install
 If your preferred client is not listed here, look for that client's MCP server settings and configure it to run:
 
 ```bash
-uv run essdive-mcp
+uvx --from git+https://github.com/ess-dive/essdive-mcp essdive-mcp
 ```
 
 For hosted or container deployments, the same server can run over streamable HTTP instead:
 
 ```bash
-uv run essdive-mcp --transport streamable-http --host 0.0.0.0 --port 8000 --path /mcp
+uvx --from git+https://github.com/ess-dive/essdive-mcp essdive-mcp --transport streamable-http --host 0.0.0.0 --port 8000 --path /mcp
 ```
 
 Client Options:
@@ -445,7 +457,7 @@ Register the server:
 
 ```bash
 claude mcp add --transport stdio essdive-mcp -- \
-  uv run essdive-mcp
+  uvx --from git+https://github.com/ess-dive/essdive-mcp essdive-mcp
 ```
 
 Then check it:
@@ -468,15 +480,15 @@ Register the server:
 
 ```bash
 codex mcp add essdive-mcp -- \
-  uv run essdive-mcp
+  uvx --from git+https://github.com/ess-dive/essdive-mcp essdive-mcp
 ```
 
 Or add it manually to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.essdive-mcp]
-command = "uv"
-args = ["run", "essdive-mcp"]
+command = "uvx"
+args = ["--from", "git+https://github.com/ess-dive/essdive-mcp", "essdive-mcp"]
 ```
 
 Then confirm it:

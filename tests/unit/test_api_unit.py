@@ -21,6 +21,7 @@ from essdive_mcp.main import (
     _load_projects,
     search_projects,
     _dataset_matches_local_filters,
+    _normalize_search_text,
     _apply_local_dataset_filters,
     _default_dataset_search_is_public,
     _resolve_startup_api_token,
@@ -1013,7 +1014,7 @@ class TestESSDiveClient:
             )
 
             params = mock_client_instance.get.call_args.kwargs["params"]
-            assert params == {"cursor": "cursor-123", "text": "soil carbon", "sort": "name:asc"}
+            assert params == {"cursor": "cursor-123", "text": "(soil AND carbon)", "sort": "name:asc"}
 
     @pytest.mark.asyncio
     async def test_search_datasets_cursor_includes_explicit_matching_page_size(self):
@@ -1105,11 +1106,11 @@ class TestESSDiveClient:
             first_params = mock_client_instance.get.call_args_list[0].kwargs["params"]
             second_params = mock_client_instance.get.call_args_list[1].kwargs["params"]
             assert first_params["pageSize"] == 2
-            assert first_params["text"] == "soil carbon"
+            assert first_params["text"] == "(soil AND carbon)"
             assert first_params["sort"] == "name:asc"
             assert second_params == {
                 "cursor": "next-cursor-123",
-                "text": "soil carbon",
+                "text": "(soil AND carbon)",
                 "sort": "name:asc",
             }
 
@@ -3262,3 +3263,74 @@ class TestSearchDatasetsToolSchema:
         description = _search_datasets_tool().description
         assert 'query="Alaska"' in description
         assert "next-search-page" in description
+
+
+class TestNormalizeSearchText:
+    """Multi-word text must not lose every word after the first."""
+
+    @pytest.mark.parametrize("text, expected", [
+        ("Alaska", "Alaska"),
+        ("  Alaska  ", "Alaska"),
+        ("Alaska?", "Alaska"),
+        ("Alas*", "Alas*"),
+        ("ESS-DIVE", "ESS-DIVE"),
+        ('"Alaska"', '"Alaska"'),
+        ('"soil carbon"', '"soil carbon"'),
+        ("hydrology Alaska", "(hydrology AND Alaska)"),
+        ("soil carbon in Alaska", "(soil AND carbon AND Alaska)"),
+        ("datasets in Alaska", "Alaska"),
+        ("What datasets are from Alaska?", "Alaska"),
+        ("Utqiagvik (Barrow), Alaska", "(Utqiagvik AND Barrow AND Alaska)"),
+        ("Alaska: soil", "(Alaska AND soil)"),
+        ('"soil carbon" Alaska', '("soil carbon" AND Alaska)'),
+        ('"soil carbon', "(soil AND carbon)"),
+        ("ess-dive data", "(ess-dive AND data)"),
+    ])
+    def test_plain_text_requires_every_meaningful_word(self, text, expected):
+        assert _normalize_search_text(text) == expected
+
+    @pytest.mark.parametrize("text, expected", [
+        ("Alaska AND permafrost", "(Alaska AND permafrost)"),
+        ("xyzzyqq OR Alaska", "(xyzzyqq OR Alaska)"),
+        ("Alaska NOT permafrost", "(Alaska NOT permafrost)"),
+        ("Alaska -permafrost", "(Alaska -permafrost)"),
+        ("+Alaska +permafrost", "(+Alaska +permafrost)"),
+    ])
+    def test_explicit_operators_keep_their_meaning(self, text, expected):
+        assert _normalize_search_text(text) == expected
+
+    def test_punctuation_only_text_is_left_alone(self):
+        assert _normalize_search_text("?") == "?"
+
+    @pytest.mark.asyncio
+    async def test_search_sends_rewritten_text_and_records_it(self):
+        response = Mock()
+        response.json.return_value = {"total": 59, "result": []}
+        response.raise_for_status.return_value = None
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+            mock_client.get.return_value = response
+
+            result = await ESSDiveClient().search_datasets(text="hydrology Alaska")
+
+        params = mock_client.get.call_args.kwargs["params"]
+        assert params["text"] == "(hydrology AND Alaska)"
+        assert result["appliedText"] == "(hydrology AND Alaska)"
+        assert "Search text sent to ESS-DIVE: (hydrology AND Alaska)" in (
+            ESSDiveClient().format_results(result)
+        )
+
+    @pytest.mark.asyncio
+    async def test_unchanged_text_is_not_reported_as_rewritten(self):
+        response = Mock()
+        response.json.return_value = {"total": 364, "result": []}
+        response.raise_for_status.return_value = None
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+            mock_client.get.return_value = response
+
+            result = await ESSDiveClient().search_datasets(text="Alaska")
+
+        assert "appliedText" not in result

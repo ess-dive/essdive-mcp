@@ -597,6 +597,19 @@ Found 20 datasets. Showing 3 results:
    Published: 2025
 ```
 
+### How search text is interpreted
+
+The ESS-DIVE API applies only the first word of unquoted multi-word text, so the server rewrites `query` before sending it. Every meaningful word must match, and filler words such as "in" and "datasets" are removed. Results show the rewritten text as `Search text sent to ESS-DIVE`.
+
+| `query` | Sent to ESS-DIVE |
+| --- | --- |
+| `datasets in Alaska` | `Alaska` |
+| `hydrology Alaska` | `(hydrology AND Alaska)` |
+| `"soil carbon" Alaska` | `("soil carbon" AND Alaska)` |
+| `Alaska OR Siberia` | `(Alaska OR Siberia)` |
+
+Write `AND`, `OR`, or `NOT` in capitals to control the logic yourself. Requiring every word can narrow a search more than expected: `Alaska USA` finds far fewer datasets than `Alaska`, because many Alaska records never mention the USA.
+
 ### Metadata post-filtering examples
 
 These examples use a two-step pattern:

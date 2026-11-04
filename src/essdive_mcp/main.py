@@ -105,9 +105,10 @@ T = TypeVar("T")
 SEARCH_DATASETS_DESCRIPTION = """\
 Search for datasets in ESS-DIVE.
 
-Start broad and report the "Found N" total to the user. For a place, use one \
-word in query (query="Alaska") or a bounding box. Avoid keywords for places: \
-it matches a curated field exactly, so it misses most datasets.
+Start broad and report the "Found N" total to the user. For a place, use \
+query (query="Alaska") or a bounding box. Avoid keywords for places: it \
+matches a curated field exactly, so it misses most datasets. Every query word \
+must match, so drop words that are not essential if a search comes back small.
 
 This stores session pagination state; when the user asks for more, next page, \
 previous page, or continued results from this search, call next-search-page \
@@ -121,6 +122,18 @@ Examples:
   lat=37.7749 and lon=-122.4194 and radius=5000
   query="snowmelt" and creator_affiliation="Pennsylvania"
 """
+# Words that say what the user wants rather than what the dataset contains. Solr
+# already ignores some of these, but others ("from", "datasets") match only part
+# of the catalog, so requiring them would quietly drop real results.
+_SEARCH_FILLER_WORDS = frozenset({
+    "a", "about", "all", "an", "and", "any", "are", "at", "by", "data",
+    "dataset", "datasets", "ess-dive", "essdive", "find", "for", "from", "get",
+    "give", "in", "is", "list", "me", "of", "on", "or", "please", "search",
+    "show", "that", "the", "there", "to", "what", "which", "with", "within",
+})
+_SEARCH_OPERATORS = frozenset({"AND", "OR", "NOT", "&&", "||"})
+_SEARCH_TOKEN_PATTERN = re.compile(r'"[^"]*"|\S+')
+_SEARCH_EDGE_PUNCTUATION = ".,;:!?()[]{}\"'"
 LOCAL_FILTER_NOTE = (
     "Local post-filter: applied only to the current page of API results, so "
     "matches on later pages are not counted."
@@ -431,6 +444,52 @@ def _quote_exact_search_phrase(value: str) -> str:
         return normalized_value
     escaped_value = normalized_value.replace('"', '\\"')
     return f'"{escaped_value}"'
+
+
+def _is_search_operator(token: str) -> bool:
+    """Return True when a token shows the caller wrote explicit query syntax."""
+    return token in _SEARCH_OPERATORS or token[0] in "+-!"
+
+
+def _clean_search_word(token: str) -> str:
+    """Strip sentence punctuation, which Solr would read as query syntax."""
+    if len(token) >= 2 and token[0] == '"' and token[-1] == '"':
+        return token
+    return token.strip(_SEARCH_EDGE_PUNCTUATION)
+
+
+def _normalize_search_text(text: str) -> str:
+    """Rewrite free text so the ESS-DIVE API applies every word.
+
+    The API builds `text:<value>`, which ties only the first word to the search
+    field and silently ignores the rest. Parentheses scope the whole value, and
+    AND keeps a place or topic word from being dropped. Text that already uses
+    operators keeps its meaning and only gains the parentheses.
+    """
+    stripped = text.strip()
+    tokens = _SEARCH_TOKEN_PATTERN.findall(stripped)
+    if any(_is_search_operator(token) for token in tokens):
+        return f"({stripped})"
+
+    words = [word for word in map(_clean_search_word, tokens) if word]
+    if not words:
+        return stripped
+    kept = [word for word in words if word.lower() not in _SEARCH_FILLER_WORDS]
+    kept = kept or words
+    if len(kept) == 1:
+        return kept[0]
+    return f"({' AND '.join(kept)})"
+
+
+def _record_applied_text(
+    result: Dict[str, Any],
+    text: Optional[str],
+    applied_text: Optional[str],
+) -> Dict[str, Any]:
+    """Note a rewritten search so callers can see what actually ran."""
+    if applied_text and applied_text != text:
+        result["appliedText"] = applied_text
+    return result
 
 
 def _run_in_new_event_loop(awaitable: Awaitable[T]) -> T:
@@ -2280,7 +2339,7 @@ class ESSDiveClient:
             is_public: If True, only return public packages
             creator: Filter by dataset creator
             provider_name: Filter by dataset project/provider
-            text: Full-text search across metadata fields
+            text: Full-text search across metadata fields; see _normalize_search_text
             date_published: Filter by publication date
             begin_date: Filter by temporal coverage window start date
             end_date: Filter by temporal coverage window end date
@@ -2305,6 +2364,7 @@ class ESSDiveClient:
         params: Dict[str, Any] = {}
         effective_row_start = 1 if row_start is None else row_start
         effective_page_size = 25 if page_size is None else page_size
+        applied_text = _normalize_search_text(text) if text else None
         normalized_bbox = _validate_dataset_search_spatial_params(
             bbox=bbox,
             lat=lat,
@@ -2328,8 +2388,8 @@ class ESSDiveClient:
             params["creator"] = creator
         if provider_name:
             params["providerName"] = _quote_exact_search_phrase(provider_name)
-        if text:
-            params["text"] = text
+        if applied_text:
+            params["text"] = applied_text
         if date_published:
             params["datePublished"] = date_published
         if begin_date:
@@ -2362,14 +2422,14 @@ class ESSDiveClient:
                         "ESS-DIVE search returned 404 with no matching datasets; "
                         "converting to an empty result set"
                     )
-                    return _empty_dataset_search_result(
+                    empty_result = _empty_dataset_search_result(
                         row_start=None if cursor else effective_row_start,
                         page_size=page_size if cursor else effective_page_size,
                         cursor=cursor,
                         is_public=is_public,
                         creator=creator,
                         provider_name=provider_name,
-                        text=text,
+                        text=applied_text,
                         date_published=date_published,
                         begin_date=begin_date,
                         end_date=end_date,
@@ -2380,6 +2440,7 @@ class ESSDiveClient:
                         lon=lon,
                         radius=radius,
                     )
+                    return _record_applied_text(empty_result, text, applied_text)
                 raise
             result = response.json()
             LOGGER.debug(
@@ -2388,7 +2449,7 @@ class ESSDiveClient:
                 len(result.get("result", [])) if isinstance(
                     result, dict) else "n/a",
             )
-            return result
+            return _record_applied_text(result, text, applied_text)
 
     async def get_dataset(self, identifier: str) -> Dict[str, Any]:
         """
@@ -2545,6 +2606,9 @@ class ESSDiveClient:
         else:
             header = f"Found {total} datasets. Showing {len(datasets)} results:\n\n"
 
+        applied_text = results.get("appliedText")
+        if applied_text:
+            header += f"Search text sent to ESS-DIVE: {applied_text}\n\n"
         if sort_value:
             header += f"Sort: {sort_value}\n\n"
         if user_note:
@@ -3381,10 +3445,10 @@ def main():
     )
     async def search_datasets(
         query: Annotated[Optional[str], Field(description=(
-            "Full-text search. Prefer one distinctive word: the ESS-DIVE API "
-            "applies only the first word of unquoted multi-word text, so "
-            "'hydrology Alaska' searches for 'hydrology' alone. Quote a phrase "
-            "(\"soil carbon\") or join terms with AND (Alaska AND hydrology)."
+            "Full-text search. Every word must match: 'hydrology in Alaska' "
+            "runs as (hydrology AND Alaska), with filler words such as 'in' "
+            "and 'datasets' removed. Quote a phrase (\"soil carbon\"), or "
+            "write AND, OR, or NOT yourself to control the logic."
         ))] = None,
         creator: Annotated[Optional[str], Field(
             description="Filter by dataset creator name."

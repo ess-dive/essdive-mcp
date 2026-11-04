@@ -76,13 +76,14 @@ from threading import RLock
 from time import monotonic
 import requests
 from io import StringIO
-from typing import Dict, List, Optional, Any, Union, Awaitable, Callable, TypeVar
+from typing import Annotated, Dict, List, Optional, Any, Union, Awaitable, Callable, TypeVar
 import httpx
 from urllib.parse import quote
 from urllib.parse import quote as url_quote
 from uuid import uuid4
 
 from mcp.server.mcpserver import Context, MCPServer
+from pydantic import Field
 from essdive_mcp import projects as projects_module
 from essdive_mcp.projects import ESSDIVE_PROJECTS
 
@@ -101,6 +102,29 @@ CROSSREF_USER_AGENT = (
     "essdive-mcp/0.3.1 (https://github.com/ess-dive/essdive-mcp)"
 )
 T = TypeVar("T")
+SEARCH_DATASETS_DESCRIPTION = """\
+Search for datasets in ESS-DIVE.
+
+Start broad and report the "Found N" total to the user. For a place, use one \
+word in query (query="Alaska") or a bounding box. Avoid keywords for places: \
+it matches a curated field exactly, so it misses most datasets.
+
+This stores session pagination state; when the user asks for more, next page, \
+previous page, or continued results from this search, call next-search-page \
+or previous-search-page instead of repeating the search.
+
+Examples:
+  query="permafrost" and page_size=10
+  creator="Smith" and provider_name="NGEE Arctic"
+  begin_date="2020" and end_date="2021-06" and format="detailed"
+  bbox=[51.0, -180.0, 72.0, -129.0]
+  lat=37.7749 and lon=-122.4194 and radius=5000
+  query="snowmelt" and creator_affiliation="Pennsylvania"
+"""
+LOCAL_FILTER_NOTE = (
+    "Local post-filter: applied only to the current page of API results, so "
+    "matches on later pages are not counted."
+)
 PROJECTS_SOURCE_PATH = str(Path(projects_module.__file__).resolve())
 
 # Pagination-state key used when the transport carries no session identity of
@@ -3353,92 +3377,103 @@ def main():
     # Register tool functions
     @server.tool(
         name="search-datasets",
-        description=(
-            "Search for datasets in ESS-DIVE. This stores session pagination "
-            "state; when the user asks for more, next page, previous page, or "
-            "continued results from this search, call next-search-page or "
-            "previous-search-page instead of repeating the search."
-        ),
+        description=SEARCH_DATASETS_DESCRIPTION,
     )
     async def search_datasets(
-        query: Optional[str] = None,
-        creator: Optional[str] = None,
-        provider_name: Optional[str] = None,
-        date_published: Optional[str] = None,
-        begin_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-        keywords: Optional[Union[str, List[str]]] = None,
-        sort: Optional[str] = None,
-        bbox: Optional[Union[str, List[float]]] = None,
-        lat: Optional[float] = None,
-        lon: Optional[float] = None,
-        radius: Optional[float] = None,
-        creator_affiliation: Optional[Union[str, List[str]]] = None,
-        variable_measured: Optional[Union[str, List[str]]] = None,
-        measurement_technique: Optional[Union[str, List[str]]] = None,
-        funder: Optional[Union[str, List[str]]] = None,
-        license: Optional[Union[str, List[str]]] = None,
-        alternate_name: Optional[Union[str, List[str]]] = None,
-        editor: Optional[Union[str, List[str]]] = None,
-        file_format: Optional[Union[str, List[str]]] = None,
-        file_name: Optional[Union[str, List[str]]] = None,
-        file_url: Optional[Union[str, List[str]]] = None,
-        cursor: Optional[str] = None,
-        row_start: Optional[int] = None,
-        page_size: Optional[int] = None,
-        format: str = "summary",
+        query: Annotated[Optional[str], Field(description=(
+            "Full-text search. Prefer one distinctive word: the ESS-DIVE API "
+            "applies only the first word of unquoted multi-word text, so "
+            "'hydrology Alaska' searches for 'hydrology' alone. Quote a phrase "
+            "(\"soil carbon\") or join terms with AND (Alaska AND hydrology)."
+        ))] = None,
+        creator: Annotated[Optional[str], Field(
+            description="Filter by dataset creator name."
+        )] = None,
+        provider_name: Annotated[Optional[str], Field(description=(
+            "Filter by exact project/provider name, e.g. 'NGEE Arctic'. This "
+            "is not a place filter."
+        ))] = None,
+        date_published: Annotated[Optional[str], Field(
+            description="Publication date filter, e.g. '[2016 TO 2023]'."
+        )] = None,
+        begin_date: Annotated[Optional[str], Field(description=(
+            "Temporal coverage window start: YYYY, YYYY-MM, or YYYY-MM-DD."
+        ))] = None,
+        end_date: Annotated[Optional[str], Field(description=(
+            "Temporal coverage window end: YYYY, YYYY-MM, or YYYY-MM-DD."
+        ))] = None,
+        keywords: Annotated[Optional[Union[str, List[str]]], Field(description=(
+            "Exact, case-sensitive match on the curated keyword field, which "
+            "many datasets lack. Multiple keywords must ALL match, so lists "
+            "shrink results fast. Use query, not keywords, for places and "
+            "broad topics."
+        ))] = None,
+        sort: Annotated[Optional[str], Field(description=(
+            "Sort string, e.g. 'name:asc' or "
+            "'dateUploaded:desc,authorLastName:asc'. Results default to newest "
+            "upload first, not relevance."
+        ))] = None,
+        bbox: Annotated[Optional[Union[str, List[float]]], Field(description=(
+            "Bounding box in LATITUDE-FIRST order: "
+            "'min_lat,min_lon,max_lat,max_lon' or the same as a list. This is "
+            "not GeoJSON order. Boxes cannot cross the 180 degree meridian; "
+            "search each side separately."
+        ))] = None,
+        lat: Annotated[Optional[float], Field(description=(
+            "Latitude for a point search. Requires lon and radius."
+        ))] = None,
+        lon: Annotated[Optional[float], Field(description=(
+            "Longitude for a point search. Requires lat and radius."
+        ))] = None,
+        radius: Annotated[Optional[float], Field(description=(
+            "Point search radius in METERS, not kilometers: 100 km is 100000."
+        ))] = None,
+        creator_affiliation: Annotated[Optional[Union[str, List[str]]], Field(
+            description=f"Creator affiliation text. {LOCAL_FILTER_NOTE}"
+        )] = None,
+        variable_measured: Annotated[Optional[Union[str, List[str]]], Field(
+            description=f"variableMeasured values. {LOCAL_FILTER_NOTE}"
+        )] = None,
+        measurement_technique: Annotated[Optional[Union[str, List[str]]], Field(
+            description=f"measurementTechnique text. {LOCAL_FILTER_NOTE}"
+        )] = None,
+        funder: Annotated[Optional[Union[str, List[str]]], Field(
+            description=f"Funder names or IDs. {LOCAL_FILTER_NOTE}"
+        )] = None,
+        license: Annotated[Optional[Union[str, List[str]]], Field(
+            description=f"Dataset license text or URL. {LOCAL_FILTER_NOTE}"
+        )] = None,
+        alternate_name: Annotated[Optional[Union[str, List[str]]], Field(
+            description=f"alternateName values. {LOCAL_FILTER_NOTE}"
+        )] = None,
+        editor: Annotated[Optional[Union[str, List[str]]], Field(
+            description=f"Dataset contact/editor metadata. {LOCAL_FILTER_NOTE}"
+        )] = None,
+        file_format: Annotated[Optional[Union[str, List[str]]], Field(
+            description=f"File encodingFormat values. {LOCAL_FILTER_NOTE}"
+        )] = None,
+        file_name: Annotated[Optional[Union[str, List[str]]], Field(
+            description=f"File names. {LOCAL_FILTER_NOTE}"
+        )] = None,
+        file_url: Annotated[Optional[Union[str, List[str]]], Field(
+            description=f"File content URLs. {LOCAL_FILTER_NOTE}"
+        )] = None,
+        cursor: Annotated[Optional[str], Field(description=(
+            "Opaque cursor for a follow-up page. Prefer next-search-page."
+        ))] = None,
+        row_start: Annotated[Optional[int], Field(description=(
+            "Legacy row number to start on when not using cursor pagination."
+        ))] = None,
+        page_size: Annotated[Optional[int], Field(description=(
+            "Results per page, maximum 100. Omit on cursor follow-ups unless "
+            "it matches the cursor."
+        ))] = None,
+        format: Annotated[str, Field(
+            description="Result format: summary, detailed, or raw."
+        )] = "summary",
         ctx: Context = None,
     ) -> str:
-        """
-        Search for datasets in the ESS-DIVE repository.
-
-        This tool stores session-specific pagination state. If the user later
-        asks for more results, the next page, the previous page, or to continue
-        this same result set, use `next-search-page` or `previous-search-page`
-        rather than calling `search-datasets` again with the same filters.
-
-        Args:
-            query: Search query text (full-text search)
-            creator: Filter by dataset creator
-            provider_name: Filter by dataset project/provider
-            date_published: Filter by publication date (e.g., "[2016 TO 2023]")
-            begin_date: Temporal coverage window start date (YYYY, YYYY-MM, or YYYY-MM-DD)
-            end_date: Temporal coverage window end date (YYYY, YYYY-MM, or YYYY-MM-DD)
-            keywords: Search for datasets with specific keywords (string or list of strings)
-            sort: Optional sort string, e.g. "name:asc" or "dateUploaded:desc,authorLastName:asc"
-            bbox: Bounding box search as "min_lat,min_lon,max_lat,max_lon" or [min_lat, min_lon, max_lat, max_lon]
-            lat: Latitude for point-based nearby search
-            lon: Longitude for point-based nearby search
-            radius: Search radius in meters for point-based nearby search
-            creator_affiliation: Local post-filter on creator affiliation text
-            variable_measured: Local post-filter on variableMeasured values
-            measurement_technique: Local post-filter on measurementTechnique text
-            funder: Local post-filter on funder names/IDs
-            license: Local post-filter on dataset license text/URL
-            alternate_name: Local post-filter on alternateName values
-            editor: Local post-filter on dataset contact/editor metadata
-            file_format: Local post-filter on distribution encodingFormat values
-            file_name: Local post-filter on distribution file names
-            file_url: Local post-filter on distribution content URLs
-            cursor: Opaque cursor for a follow-up page of search results
-            row_start: Legacy row number to start on when not using cursor pagination
-            page_size: Number of results per page; omit on cursor follow-up unless it matches the cursor
-            format: Format of the results (summary, detailed, raw)
-
-        Examples:
-            search-datasets with query="soil carbon" and page_size=10
-            search-datasets with creator="Smith" and provider_name="NGEE Arctic"
-            search-datasets with begin_date="2020" and end_date="2021-06" and format="detailed"
-            search-datasets with query="soil carbon" and sort="name:asc"
-            search-datasets with query="BIONTE" and cursor="opaque-cursor"
-            search-datasets with bbox=[34.0, -119.0, 35.0, -117.0]
-            search-datasets with lat=37.7749 and lon=-122.4194 and radius=5000
-            search-datasets with query="snowmelt" and creator_affiliation="Pennsylvania"
-            search-datasets with provider_name="SPRUCE" and variable_measured=["temperature", "CO2"]
-
-        Returns:
-            Formatted search results
-        """
+        """Search for datasets; clients see SEARCH_DATASETS_DESCRIPTION instead."""
         LOGGER.debug(
             "Tool search-datasets called query=%r creator=%r provider_name=%r begin_date=%r end_date=%r sort=%r cursor=%r bbox=%r lat=%r lon=%r radius=%r local_filters=%r row_start=%s page_size=%s format=%s",
             query,

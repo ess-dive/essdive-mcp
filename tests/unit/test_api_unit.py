@@ -39,6 +39,7 @@ from essdive_mcp.main import (
     _looks_like_doi_identifier,
 )
 import pytest
+import sys
 import os
 import requests
 import httpx
@@ -3219,3 +3220,45 @@ class TestEssDeepDiveFileSummary:
 def test_reality():
     """Basic sanity check that tests are working."""
     assert 1 == 1
+
+
+def _search_datasets_tool():
+    """Return search-datasets as clients see it, by capturing the real server."""
+    captured = {}
+
+    async def capture_server(self):
+        captured["tools"] = await self.list_tools()
+
+    with patch.object(main_module.MCPServer, "run_stdio_async", capture_server), \
+            patch.object(sys, "argv", ["essdive-mcp"]), \
+            patch.object(main_module, "_resolve_startup_api_token", return_value=None):
+        main_module.main()
+
+    return next(
+        tool for tool in captured["tools"] if tool.name == "search-datasets"
+    )
+
+
+class TestSearchDatasetsToolSchema:
+    """The parameter rules must reach clients, not sit in an unread docstring."""
+
+    def test_every_parameter_is_described(self):
+        properties = _search_datasets_tool().input_schema["properties"]
+        undescribed = [
+            name for name, schema in properties.items()
+            if not schema.get("description")
+        ]
+        assert undescribed == []
+
+    def test_easily_misused_parameters_state_their_rules(self):
+        properties = _search_datasets_tool().input_schema["properties"]
+        assert "METERS" in properties["radius"]["description"]
+        assert "LATITUDE-FIRST" in properties["bbox"]["description"]
+        assert "case-sensitive" in properties["keywords"]["description"]
+        assert "ALL match" in properties["keywords"]["description"]
+        assert "post-filter" in properties["variable_measured"]["description"]
+
+    def test_description_steers_place_searches_away_from_keywords(self):
+        description = _search_datasets_tool().description
+        assert 'query="Alaska"' in description
+        assert "next-search-page" in description

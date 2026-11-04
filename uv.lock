@@ -333,6 +333,7 @@ source = { editable = "." }
 dependencies = [
     { name = "httpx" },
     { name = "mcp" },
+    { name = "pydantic" },
     { name = "pyyaml" },
     { name = "requests" },
 ]
@@ -347,6 +348,7 @@ dev = [
 requires-dist = [
     { name = "httpx", specifier = ">=0.24.0" },
     { name = "mcp", specifier = ">=2.0.0" },
+    { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "requests", specifier = ">=2.28.0" },
 ]

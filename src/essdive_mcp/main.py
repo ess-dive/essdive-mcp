@@ -3299,6 +3299,7 @@ def essdive_id_to_doi(essdive_id: str, api_token: Optional[str] = None) -> str:
 
 # ESS-DeepDive API functions
 ESS_DEEPDIVE_BASE_URL = "https://fusion.ess-dive.lbl.gov/api/v1/deepdive"
+DEEPDIVE_MAX_PAGE_SIZE = 100
 
 
 def search_ess_deepdive(
@@ -3337,7 +3338,7 @@ def search_ess_deepdive(
     """
     params: Dict[str, Any] = {
         "rowStart": row_start,
-        "pageSize": min(page_size, 100),  # Enforce max limit
+        "pageSize": min(page_size, DEEPDIVE_MAX_PAGE_SIZE),
     }
 
     if field_name:
@@ -3355,7 +3356,8 @@ def search_ess_deepdive(
     if record_count_max is not None:
         params["recordCountMax"] = record_count_max
     if doi:
-        params["doi"] = doi[:100]  # Enforce max 100 DOIs
+        # The API matches only the doi: form and returns nothing for the others.
+        params["doi"] = [_normalize_doi(item) for item in doi[:100]]
 
     LOGGER.debug("ESS-DeepDive search request url=%s params=%s",
                  ESS_DEEPDIVE_BASE_URL, params)
@@ -3372,6 +3374,76 @@ def search_ess_deepdive(
         len(result.get("results", [])) if isinstance(result, dict) else "n/a",
     )
     return result
+
+
+def _run_deepdive_search(
+    search_kwargs: Dict[str, Any],
+    *,
+    row_start: int,
+    page_size: int,
+    max_pages: Optional[int],
+) -> Dict[str, Any]:
+    """Run a DeepDive search over one or more pages and describe what is left.
+
+    The API's `pageCount` is the number of rows on the current page, not the
+    number of pages, and it gives no overall total. Its `next` link is set on
+    any full page, even the last one, so it means only that more may exist.
+    """
+    rows_per_page = min(page_size, DEEPDIVE_MAX_PAGE_SIZE)
+
+    if not max_pages or max_pages <= 1:
+        result = search_ess_deepdive(
+            **search_kwargs, row_start=row_start, page_size=page_size
+        )
+        if result.get("next"):
+            result["pagination_info"] = {
+                "page_size": rows_per_page,
+                "results_on_page": len(result.get("results", [])),
+                "next_row_start": row_start + rows_per_page,
+                "note": (
+                    "More results may be available. Use max_pages to fetch "
+                    "several pages, or row_start to continue."
+                ),
+            }
+        return result
+
+    all_results: List[Dict[str, Any]] = []
+    current_row = row_start
+    pages_fetched = 0
+    more_available = True
+
+    while more_available and pages_fetched < max_pages:
+        LOGGER.debug(
+            "search-ess-deepdive pagination loop page_index=%s current_row=%s",
+            pages_fetched + 1,
+            current_row,
+        )
+        result = search_ess_deepdive(
+            **search_kwargs, row_start=current_row, page_size=page_size
+        )
+        page_results = result.get("results", [])
+        if not page_results:
+            more_available = False
+            break
+        all_results.extend(page_results)
+        pages_fetched += 1
+        more_available = bool(result.get("next"))
+        current_row += rows_per_page
+
+    collected: Dict[str, Any] = {
+        "results": all_results,
+        "total_results_fetched": len(all_results),
+        "pages_fetched": pages_fetched,
+    }
+    if more_available:
+        collected["next_row_start"] = current_row
+        collected["note"] = (
+            f"Fetched {pages_fetched} pages and more results may be available. "
+            "Raise max_pages or use next_row_start as row_start to continue."
+        )
+    else:
+        collected["note"] = f"Fetched all remaining results in {pages_fetched} pages."
+    return collected
 
 
 def get_ess_deepdive_dataset(doi: str, file_path: str) -> Dict[str, Any]:
@@ -4579,9 +4651,8 @@ def main():
             description="Maximum record count for a field."
         )] = None,
         doi: Annotated[Optional[str], Field(description=(
-            "DOI filter, comma-separated for multiple, up to 100. Each DOI MUST "
-            "start with doi: (doi:10.xxxx/...). Any other form silently returns "
-            "no results."
+            "DOI filter in any common format, comma-separated for multiple, up "
+            "to 100."
         ))] = None,
         row_start: Annotated[int, Field(
             description="Row to start on, counting from 1."
@@ -4591,7 +4662,8 @@ def main():
         )] = 25,
         max_pages: Annotated[Optional[int], Field(description=(
             "Maximum number of pages to fetch and combine in this one call. "
-            "Omit to fetch a single page."
+            "Omit to fetch a single page. The API gives no overall total, so "
+            "the result only says whether more may be available."
         ))] = None,
     ) -> str:
         """
@@ -4619,86 +4691,26 @@ def main():
             max_pages,
         )
         try:
-            # Parse DOI string if provided
             doi_list = None
             if doi:
-                doi_list = [d.strip() for d in doi.split(",")]
+                doi_list = [item.strip() for item in doi.split(",") if item.strip()]
 
-            # If max_pages is specified, paginate through results
-            if max_pages and max_pages > 1:
-                all_results = []
-                current_row = row_start
-                pages_fetched = 0
-
-                while pages_fetched < max_pages:
-                    LOGGER.debug(
-                        "search-ess-deepdive pagination loop page_index=%s current_row=%s",
-                        pages_fetched + 1,
-                        current_row,
-                    )
-                    result = search_ess_deepdive(
-                        field_name=field_name,
-                        field_definition=field_definition,
-                        field_value_text=field_value_text,
-                        field_value_numeric=field_value_numeric,
-                        field_value_date=field_value_date,
-                        record_count_min=record_count_min,
-                        record_count_max=record_count_max,
-                        doi=doi_list,
-                        row_start=current_row,
-                        page_size=page_size,
-                    )
-
-                    # Collect results from this page
-                    if "results" in result:
-                        all_results.extend(result["results"])
-
-                    # Check if there are more pages
-                    page_count = result.get("pageCount", 0)
-                    if not page_count or page_count <= 1:
-                        # No more pages available
-                        break
-
-                    pages_fetched += 1
-                    current_row += page_size
-
-                # Return combined results with metadata
-                return json.dumps(
-                    {
-                        "results": all_results,
-                        "total_results_fetched": len(all_results),
-                        "pages_fetched": pages_fetched + 1,
-                        "note": f"Fetched {pages_fetched + 1} pages. Use row_start and page_size to fetch additional pages.",
-                    },
-                    indent=2,
-                )
-            else:
-                # Single page request
-                result = search_ess_deepdive(
-                    field_name=field_name,
-                    field_definition=field_definition,
-                    field_value_text=field_value_text,
-                    field_value_numeric=field_value_numeric,
-                    field_value_date=field_value_date,
-                    record_count_min=record_count_min,
-                    record_count_max=record_count_max,
-                    doi=doi_list,
-                    row_start=row_start,
-                    page_size=page_size,
-                )
-
-                # Add helpful pagination info to response
-                page_count = result.get("pageCount", 0)
-                if page_count and page_count > 1:
-                    result["pagination_info"] = {
-                        "current_page": 1,
-                        "total_pages": page_count,
-                        "page_size": page_size,
-                        "next_row_start": row_start + page_size,
-                        "note": "Use max_pages parameter to automatically fetch all pages, or manually paginate using row_start",
-                    }
-
-                return json.dumps(result, indent=2)
+            result = _run_deepdive_search(
+                {
+                    "field_name": field_name,
+                    "field_definition": field_definition,
+                    "field_value_text": field_value_text,
+                    "field_value_numeric": field_value_numeric,
+                    "field_value_date": field_value_date,
+                    "record_count_min": record_count_min,
+                    "record_count_max": record_count_max,
+                    "doi": doi_list,
+                },
+                row_start=row_start,
+                page_size=page_size,
+                max_pages=max_pages,
+            )
+            return json.dumps(result, indent=2)
         except Exception as exc:
             return _tool_error_response(
                 "search-ess-deepdive",

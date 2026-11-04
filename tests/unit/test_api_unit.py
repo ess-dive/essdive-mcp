@@ -21,6 +21,9 @@ from essdive_mcp.main import (
     _load_projects,
     search_projects,
     _dataset_matches_local_filters,
+    _normalize_search_text,
+    _execute_dataset_search_request,
+    LOCAL_FILTER_SCAN_LIMIT,
     _apply_local_dataset_filters,
     _default_dataset_search_is_public,
     _resolve_startup_api_token,
@@ -39,6 +42,7 @@ from essdive_mcp.main import (
     _looks_like_doi_identifier,
 )
 import pytest
+import sys
 import os
 import requests
 import httpx
@@ -1012,7 +1016,7 @@ class TestESSDiveClient:
             )
 
             params = mock_client_instance.get.call_args.kwargs["params"]
-            assert params == {"cursor": "cursor-123", "text": "soil carbon", "sort": "name:asc"}
+            assert params == {"cursor": "cursor-123", "text": "(soil AND carbon)", "sort": "name:asc"}
 
     @pytest.mark.asyncio
     async def test_search_datasets_cursor_includes_explicit_matching_page_size(self):
@@ -1104,11 +1108,11 @@ class TestESSDiveClient:
             first_params = mock_client_instance.get.call_args_list[0].kwargs["params"]
             second_params = mock_client_instance.get.call_args_list[1].kwargs["params"]
             assert first_params["pageSize"] == 2
-            assert first_params["text"] == "soil carbon"
+            assert first_params["text"] == "(soil AND carbon)"
             assert first_params["sort"] == "name:asc"
             assert second_params == {
                 "cursor": "next-cursor-123",
-                "text": "soil carbon",
+                "text": "(soil AND carbon)",
                 "sort": "name:asc",
             }
 
@@ -3219,3 +3223,271 @@ class TestEssDeepDiveFileSummary:
 def test_reality():
     """Basic sanity check that tests are working."""
     assert 1 == 1
+
+
+def _search_datasets_tool():
+    """Return search-datasets as clients see it, by capturing the real server."""
+    captured = {}
+
+    async def capture_server(self):
+        captured["tools"] = await self.list_tools()
+
+    with patch.object(main_module.MCPServer, "run_stdio_async", capture_server), \
+            patch.object(sys, "argv", ["essdive-mcp"]), \
+            patch.object(main_module, "_resolve_startup_api_token", return_value=None):
+        main_module.main()
+
+    return next(
+        tool for tool in captured["tools"] if tool.name == "search-datasets"
+    )
+
+
+class TestSearchDatasetsToolSchema:
+    """The parameter rules must reach clients, not sit in an unread docstring."""
+
+    def test_every_parameter_is_described(self):
+        properties = _search_datasets_tool().input_schema["properties"]
+        undescribed = [
+            name for name, schema in properties.items()
+            if not schema.get("description")
+        ]
+        assert undescribed == []
+
+    def test_easily_misused_parameters_state_their_rules(self):
+        properties = _search_datasets_tool().input_schema["properties"]
+        assert "METERS" in properties["radius"]["description"]
+        assert "LATITUDE-FIRST" in properties["bbox"]["description"]
+        assert "case-sensitive" in properties["keywords"]["description"]
+        assert "ALL match" in properties["keywords"]["description"]
+        assert "post-filter" in properties["variable_measured"]["description"]
+
+    def test_description_steers_place_searches_away_from_keywords(self):
+        description = _search_datasets_tool().description
+        assert 'query="Alaska"' in description
+        assert "next-search-page" in description
+
+
+class TestNormalizeSearchText:
+    """Multi-word text must not lose every word after the first."""
+
+    @pytest.mark.parametrize("text, expected", [
+        ("Alaska", "Alaska"),
+        ("  Alaska  ", "Alaska"),
+        ("Alaska?", "Alaska"),
+        ("Alas*", "Alas*"),
+        ("ESS-DIVE", "ESS-DIVE"),
+        ('"Alaska"', '"Alaska"'),
+        ('"soil carbon"', '"soil carbon"'),
+        ("hydrology Alaska", "(hydrology AND Alaska)"),
+        ("soil carbon in Alaska", "(soil AND carbon AND Alaska)"),
+        ("datasets in Alaska", "Alaska"),
+        ("What datasets are from Alaska?", "Alaska"),
+        ("Utqiagvik (Barrow), Alaska", "(Utqiagvik AND Barrow AND Alaska)"),
+        ("Alaska: soil", "(Alaska AND soil)"),
+        ('"soil carbon" Alaska', '("soil carbon" AND Alaska)'),
+        ('"soil carbon', "(soil AND carbon)"),
+        ("ess-dive data", "(ess-dive AND data)"),
+    ])
+    def test_plain_text_requires_every_meaningful_word(self, text, expected):
+        assert _normalize_search_text(text) == expected
+
+    @pytest.mark.parametrize("text, expected", [
+        ("Alaska AND permafrost", "(Alaska AND permafrost)"),
+        ("xyzzyqq OR Alaska", "(xyzzyqq OR Alaska)"),
+        ("Alaska NOT permafrost", "(Alaska NOT permafrost)"),
+        ("Alaska -permafrost", "(Alaska -permafrost)"),
+        ("+Alaska +permafrost", "(+Alaska +permafrost)"),
+    ])
+    def test_explicit_operators_keep_their_meaning(self, text, expected):
+        assert _normalize_search_text(text) == expected
+
+    def test_punctuation_only_text_is_left_alone(self):
+        assert _normalize_search_text("?") == "?"
+
+    @pytest.mark.asyncio
+    async def test_search_sends_rewritten_text_and_records_it(self):
+        response = Mock()
+        response.json.return_value = {"total": 59, "result": []}
+        response.raise_for_status.return_value = None
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+            mock_client.get.return_value = response
+
+            result = await ESSDiveClient().search_datasets(text="hydrology Alaska")
+
+        params = mock_client.get.call_args.kwargs["params"]
+        assert params["text"] == "(hydrology AND Alaska)"
+        assert result["appliedText"] == "(hydrology AND Alaska)"
+        assert "Search text sent to ESS-DIVE: (hydrology AND Alaska)" in (
+            ESSDiveClient().format_results(result)
+        )
+
+    @pytest.mark.asyncio
+    async def test_unchanged_text_is_not_reported_as_rewritten(self):
+        response = Mock()
+        response.json.return_value = {"total": 364, "result": []}
+        response.raise_for_status.return_value = None
+        with patch("essdive_mcp.main.httpx.AsyncClient") as mock_client_class:
+            mock_client = AsyncMock()
+            mock_client_class.return_value.__aenter__.return_value = mock_client
+            mock_client.get.return_value = response
+
+            result = await ESSDiveClient().search_datasets(text="Alaska")
+
+        assert "appliedText" not in result
+
+
+def _paged_filter_client(pages):
+    """Build a client over fake API pages; ids starting with 'hit' match a filter."""
+    client = ESSDiveClient()
+    responses = {None: pages[0]}
+    for index, page in enumerate(pages[:-1]):
+        page["nextCursor"] = f"cursor-{index + 1}"
+        responses[page["nextCursor"]] = pages[index + 1]
+    for index, page in enumerate(pages[1:]):
+        page["previousCursor"] = f"back-{index}"
+
+    async def search_datasets(**kwargs):
+        return dict(responses[kwargs.get("cursor")])
+
+    async def get_dataset(identifier):
+        variables = ["temperature"] if identifier.startswith("hit") else ["pH"]
+        return {"dataset": {"variableMeasured": variables}}
+
+    client.search_datasets = AsyncMock(side_effect=search_datasets)
+    client.get_dataset = AsyncMock(side_effect=get_dataset)
+    return client
+
+
+def _fake_page(ids, total):
+    return {"total": total, "result": [{"id": item} for item in ids]}
+
+
+class TestLocalFilterScan:
+    """Local filters must not report one page of matches as the whole answer."""
+
+    FILTERS = {"variable_measured": ["temperature"]}
+
+    @pytest.mark.asyncio
+    async def test_scans_later_pages_and_reports_a_true_total(self):
+        client = _paged_filter_client([
+            _fake_page(["miss-1", "hit-1"], 5),
+            _fake_page(["miss-2", "miss-3"], 5),
+            _fake_page(["hit-2"], 5),
+        ])
+
+        result = await _execute_dataset_search_request(
+            client, search_kwargs={"text": "Alaska"}, local_filters=self.FILTERS
+        )
+
+        assert [item["id"] for item in result["result"]] == ["hit-1", "hit-2"]
+        assert result["total"] == 2
+        assert result["filtering"]["complete"] is True
+        assert result["filtering"]["scanned_results"] == 5
+        assert result["filtering"]["native_total"] == 5
+        assert "nextCursor" not in result
+
+    @pytest.mark.asyncio
+    async def test_stops_once_a_page_of_matches_is_full(self):
+        client = _paged_filter_client([
+            _fake_page(["hit-1", "miss-1"], 6),
+            _fake_page(["hit-2", "hit-3"], 6),
+            _fake_page(["hit-4", "hit-5"], 6),
+        ])
+
+        result = await _execute_dataset_search_request(
+            client, search_kwargs={"text": "Alaska"}, local_filters=self.FILTERS
+        )
+
+        assert [item["id"] for item in result["result"]] == [
+            "hit-1", "hit-2", "hit-3",
+        ]
+        assert result["total"] is None
+        assert result["filtering"]["complete"] is False
+        assert result["nextCursor"] == "cursor-2"
+        assert client.search_datasets.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_stops_at_the_scan_limit_and_keeps_the_cursor(self):
+        page_size = 50
+        pages = [
+            _fake_page([f"miss-{page}-{row}" for row in range(page_size)], 1000)
+            for page in range(20)
+        ]
+        client = _paged_filter_client(pages)
+
+        result = await _execute_dataset_search_request(
+            client, search_kwargs={"text": "Alaska"}, local_filters=self.FILTERS
+        )
+
+        assert result["filtering"]["scanned_results"] == LOCAL_FILTER_SCAN_LIMIT
+        assert result["result"] == []
+        assert result["total"] is None
+        assert result["nextCursor"] == "cursor-4"
+
+    @pytest.mark.asyncio
+    async def test_follow_up_scan_is_never_called_complete(self):
+        """Reaching the end from a cursor says nothing about earlier pages."""
+        client = _paged_filter_client([
+            _fake_page(["hit-1"], 2),
+            _fake_page(["hit-2"], 2),
+        ])
+
+        result = await _execute_dataset_search_request(
+            client,
+            search_kwargs={"text": "Alaska", "cursor": "cursor-1"},
+            local_filters=self.FILTERS,
+        )
+
+        assert result["total"] is None
+        assert result["filtering"]["complete"] is False
+        assert "nextCursor" not in result
+
+    @pytest.mark.asyncio
+    async def test_keeps_the_first_pages_previous_cursor(self):
+        client = _paged_filter_client([
+            _fake_page(["miss-1"], 3),
+            _fake_page(["miss-2"], 3),
+            _fake_page(["hit-1"], 3),
+        ])
+
+        result = await _execute_dataset_search_request(
+            client,
+            search_kwargs={"text": "Alaska", "cursor": "cursor-1"},
+            local_filters=self.FILTERS,
+        )
+
+        assert result["previousCursor"] == "back-0"
+
+    @pytest.mark.asyncio
+    async def test_search_without_filters_makes_one_request(self):
+        client = _paged_filter_client([
+            _fake_page(["hit-1"], 2),
+            _fake_page(["hit-2"], 2),
+        ])
+
+        result = await _execute_dataset_search_request(
+            client, search_kwargs={"text": "Alaska"}, local_filters={"funder": []}
+        )
+
+        assert client.search_datasets.await_count == 1
+        assert result["total"] == 2
+        assert "filtering" not in result
+
+    def test_partial_scan_header_does_not_claim_a_total(self):
+        formatted = ESSDiveClient().format_results({
+            "total": None,
+            "result": [],
+            "nextCursor": "cursor-1",
+            "filtering": {
+                "native_total": 364,
+                "scanned_results": 200,
+                "complete": False,
+            },
+        })
+
+        assert "Found" not in formatted
+        assert "Scanned 200 API results in this request of 364" in formatted
+        assert "total number of matches is not known" in formatted
+        assert "next-search-page" in formatted

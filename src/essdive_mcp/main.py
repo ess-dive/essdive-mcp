@@ -76,13 +76,14 @@ from threading import RLock
 from time import monotonic
 import requests
 from io import StringIO
-from typing import Dict, List, Optional, Any, Union, Awaitable, Callable, TypeVar
+from typing import Annotated, Dict, List, Optional, Any, Union, Awaitable, Callable, TypeVar
 import httpx
 from urllib.parse import quote
 from urllib.parse import quote as url_quote
 from uuid import uuid4
 
 from mcp.server.mcpserver import Context, MCPServer
+from pydantic import Field
 from essdive_mcp import projects as projects_module
 from essdive_mcp.projects import ESSDIVE_PROJECTS
 
@@ -101,6 +102,46 @@ CROSSREF_USER_AGENT = (
     "essdive-mcp/0.3.1 (https://github.com/ess-dive/essdive-mcp)"
 )
 T = TypeVar("T")
+SEARCH_DATASETS_DESCRIPTION = """\
+Search for datasets in ESS-DIVE.
+
+Start broad and report the "Found N" total to the user. For a place, use \
+query (query="Alaska") or a bounding box. Avoid keywords for places: it \
+matches a curated field exactly, so it misses most datasets. Every query word \
+must match, so drop words that are not essential if a search comes back small.
+
+This stores session pagination state; when the user asks for more, next page, \
+previous page, or continued results from this search, call next-search-page \
+or previous-search-page instead of repeating the search.
+
+Examples:
+  query="permafrost" and page_size=10
+  creator="Smith" and provider_name="NGEE Arctic"
+  begin_date="2020" and end_date="2021-06" and format="detailed"
+  bbox=[51.0, -180.0, 72.0, -129.0]
+  lat=37.7749 and lon=-122.4194 and radius=5000
+  query="snowmelt" and creator_affiliation="Pennsylvania"
+"""
+# Words that say what the user wants rather than what the dataset contains. Solr
+# already ignores some of these, but others ("from", "datasets") match only part
+# of the catalog, so requiring them would quietly drop real results.
+_SEARCH_FILLER_WORDS = frozenset({
+    "a", "about", "all", "an", "and", "any", "are", "at", "by", "data",
+    "dataset", "datasets", "ess-dive", "essdive", "find", "for", "from", "get",
+    "give", "in", "is", "list", "me", "of", "on", "or", "please", "search",
+    "show", "that", "the", "there", "to", "what", "which", "with", "within",
+})
+_SEARCH_OPERATORS = frozenset({"AND", "OR", "NOT", "&&", "||"})
+_SEARCH_TOKEN_PATTERN = re.compile(r'"[^"]*"|\S+')
+_SEARCH_EDGE_PUNCTUATION = ".,;:!?()[]{}\"'"
+# Filtering fetches each dataset's full record, at about 7 records per second, so
+# this bounds one tool call to roughly 30 seconds. Later calls resume the scan.
+LOCAL_FILTER_SCAN_LIMIT = 200
+LOCAL_FILTER_NOTE = (
+    "Local post-filter: the server scans API results until it fills a page of "
+    f"matches or has scanned {LOCAL_FILTER_SCAN_LIMIT} datasets. If the result "
+    "says the scan is partial, next-search-page continues it."
+)
 PROJECTS_SOURCE_PATH = str(Path(projects_module.__file__).resolve())
 
 # Pagination-state key used when the transport carries no session identity of
@@ -407,6 +448,52 @@ def _quote_exact_search_phrase(value: str) -> str:
         return normalized_value
     escaped_value = normalized_value.replace('"', '\\"')
     return f'"{escaped_value}"'
+
+
+def _is_search_operator(token: str) -> bool:
+    """Return True when a token shows the caller wrote explicit query syntax."""
+    return token in _SEARCH_OPERATORS or token[0] in "+-!"
+
+
+def _clean_search_word(token: str) -> str:
+    """Strip sentence punctuation, which Solr would read as query syntax."""
+    if len(token) >= 2 and token[0] == '"' and token[-1] == '"':
+        return token
+    return token.strip(_SEARCH_EDGE_PUNCTUATION)
+
+
+def _normalize_search_text(text: str) -> str:
+    """Rewrite free text so the ESS-DIVE API applies every word.
+
+    The API builds `text:<value>`, which ties only the first word to the search
+    field and silently ignores the rest. Parentheses scope the whole value, and
+    AND keeps a place or topic word from being dropped. Text that already uses
+    operators keeps its meaning and only gains the parentheses.
+    """
+    stripped = text.strip()
+    tokens = _SEARCH_TOKEN_PATTERN.findall(stripped)
+    if any(_is_search_operator(token) for token in tokens):
+        return f"({stripped})"
+
+    words = [word for word in map(_clean_search_word, tokens) if word]
+    if not words:
+        return stripped
+    kept = [word for word in words if word.lower() not in _SEARCH_FILLER_WORDS]
+    kept = kept or words
+    if len(kept) == 1:
+        return kept[0]
+    return f"({' AND '.join(kept)})"
+
+
+def _record_applied_text(
+    result: Dict[str, Any],
+    text: Optional[str],
+    applied_text: Optional[str],
+) -> Dict[str, Any]:
+    """Note a rewritten search so callers can see what actually ran."""
+    if applied_text and applied_text != text:
+        result["appliedText"] = applied_text
+    return result
 
 
 def _run_in_new_event_loop(awaitable: Awaitable[T]) -> T:
@@ -931,7 +1018,70 @@ async def _execute_dataset_search_request(
 ) -> Dict[str, Any]:
     """Run an ESS-DIVE search and apply any local metadata filters."""
     result = await client.search_datasets(**search_kwargs)
-    return await _apply_local_dataset_filters(client, result, local_filters)
+    if not any(local_filters.values()):
+        return result
+    return await _scan_for_local_matches(
+        client, result, search_kwargs=search_kwargs, local_filters=local_filters
+    )
+
+
+async def _scan_for_local_matches(
+    client: "ESSDiveClient",
+    first_page: Dict[str, Any],
+    *,
+    search_kwargs: Dict[str, Any],
+    local_filters: Dict[str, List[str]],
+) -> Dict[str, Any]:
+    """Filter successive API pages until a page of matches is found or the limit hits.
+
+    Matches can sit on any page, so filtering only the first page undercounts
+    them. `total` stays None unless the whole result set was scanned, because
+    any number short of that is a partial count.
+    """
+    wanted = len(first_page.get("result", []))
+    page = first_page
+    matches: List[Dict[str, Any]] = []
+    scanned = 0
+
+    while True:
+        filtered = await _apply_local_dataset_filters(client, page, local_filters)
+        matches.extend(filtered["result"])
+        scanned += len(page.get("result", []))
+        next_cursor = page.get("nextCursor")
+        if (
+            not next_cursor
+            or len(matches) >= wanted
+            or scanned >= LOCAL_FILTER_SCAN_LIMIT
+        ):
+            break
+        page = await client.search_datasets(
+            **{
+                **search_kwargs,
+                "cursor": next_cursor,
+                "row_start": None,
+                "page_size": None,
+            }
+        )
+
+    started_at_beginning = (
+        not search_kwargs.get("cursor") and (search_kwargs.get("row_start") or 1) == 1
+    )
+    complete = started_at_beginning and not next_cursor
+
+    merged = dict(filtered)
+    merged["result"] = matches
+    merged["total"] = len(matches) if complete else None
+    merged.pop("previousCursor", None)
+    if first_page.get("previousCursor"):
+        merged["previousCursor"] = first_page["previousCursor"]
+    merged["filtering"] = {
+        **filtered["filtering"],
+        "native_total": first_page.get("total"),
+        "scanned_results": scanned,
+        "matched_results": len(matches),
+        "complete": complete,
+    }
+    return merged
 
 
 def _render_formatted_output(
@@ -2256,7 +2406,7 @@ class ESSDiveClient:
             is_public: If True, only return public packages
             creator: Filter by dataset creator
             provider_name: Filter by dataset project/provider
-            text: Full-text search across metadata fields
+            text: Full-text search across metadata fields; see _normalize_search_text
             date_published: Filter by publication date
             begin_date: Filter by temporal coverage window start date
             end_date: Filter by temporal coverage window end date
@@ -2281,6 +2431,7 @@ class ESSDiveClient:
         params: Dict[str, Any] = {}
         effective_row_start = 1 if row_start is None else row_start
         effective_page_size = 25 if page_size is None else page_size
+        applied_text = _normalize_search_text(text) if text else None
         normalized_bbox = _validate_dataset_search_spatial_params(
             bbox=bbox,
             lat=lat,
@@ -2304,8 +2455,8 @@ class ESSDiveClient:
             params["creator"] = creator
         if provider_name:
             params["providerName"] = _quote_exact_search_phrase(provider_name)
-        if text:
-            params["text"] = text
+        if applied_text:
+            params["text"] = applied_text
         if date_published:
             params["datePublished"] = date_published
         if begin_date:
@@ -2338,14 +2489,14 @@ class ESSDiveClient:
                         "ESS-DIVE search returned 404 with no matching datasets; "
                         "converting to an empty result set"
                     )
-                    return _empty_dataset_search_result(
+                    empty_result = _empty_dataset_search_result(
                         row_start=None if cursor else effective_row_start,
                         page_size=page_size if cursor else effective_page_size,
                         cursor=cursor,
                         is_public=is_public,
                         creator=creator,
                         provider_name=provider_name,
-                        text=text,
+                        text=applied_text,
                         date_published=date_published,
                         begin_date=begin_date,
                         end_date=end_date,
@@ -2356,6 +2507,7 @@ class ESSDiveClient:
                         lon=lon,
                         radius=radius,
                     )
+                    return _record_applied_text(empty_result, text, applied_text)
                 raise
             result = response.json()
             LOGGER.debug(
@@ -2364,7 +2516,7 @@ class ESSDiveClient:
                 len(result.get("result", [])) if isinstance(
                     result, dict) else "n/a",
             )
-            return result
+            return _record_applied_text(result, text, applied_text)
 
     async def get_dataset(self, identifier: str) -> Dict[str, Any]:
         """
@@ -2511,16 +2663,29 @@ class ESSDiveClient:
         if filtering:
             native_total = filtering.get("native_total")
             scanned_results = filtering.get("scanned_results")
-            header = (
-                f"Found {total} datasets after local metadata filtering. "
-                f"Scanned {scanned_results} API results"
-            )
-            if native_total is not None:
-                header += f" from {native_total} native matches"
-            header += ":\n\n"
+            if filtering.get("complete", True):
+                header = (
+                    f"Found {total} datasets after local metadata filtering. "
+                    f"Scanned {scanned_results} API results"
+                )
+                if native_total is not None:
+                    header += f" from {native_total} native matches"
+                header += ":\n\n"
+            else:
+                header = (
+                    f"Showing {len(datasets)} matches from a partial scan after "
+                    f"local metadata filtering. Scanned {scanned_results} API "
+                    "results in this request"
+                )
+                if native_total is not None:
+                    header += f" of {native_total} native matches"
+                header += ", so the total number of matches is not known:\n\n"
         else:
             header = f"Found {total} datasets. Showing {len(datasets)} results:\n\n"
 
+        applied_text = results.get("appliedText")
+        if applied_text:
+            header += f"Search text sent to ESS-DIVE: {applied_text}\n\n"
         if sort_value:
             header += f"Sort: {sort_value}\n\n"
         if user_note:
@@ -3353,92 +3518,103 @@ def main():
     # Register tool functions
     @server.tool(
         name="search-datasets",
-        description=(
-            "Search for datasets in ESS-DIVE. This stores session pagination "
-            "state; when the user asks for more, next page, previous page, or "
-            "continued results from this search, call next-search-page or "
-            "previous-search-page instead of repeating the search."
-        ),
+        description=SEARCH_DATASETS_DESCRIPTION,
     )
     async def search_datasets(
-        query: Optional[str] = None,
-        creator: Optional[str] = None,
-        provider_name: Optional[str] = None,
-        date_published: Optional[str] = None,
-        begin_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-        keywords: Optional[Union[str, List[str]]] = None,
-        sort: Optional[str] = None,
-        bbox: Optional[Union[str, List[float]]] = None,
-        lat: Optional[float] = None,
-        lon: Optional[float] = None,
-        radius: Optional[float] = None,
-        creator_affiliation: Optional[Union[str, List[str]]] = None,
-        variable_measured: Optional[Union[str, List[str]]] = None,
-        measurement_technique: Optional[Union[str, List[str]]] = None,
-        funder: Optional[Union[str, List[str]]] = None,
-        license: Optional[Union[str, List[str]]] = None,
-        alternate_name: Optional[Union[str, List[str]]] = None,
-        editor: Optional[Union[str, List[str]]] = None,
-        file_format: Optional[Union[str, List[str]]] = None,
-        file_name: Optional[Union[str, List[str]]] = None,
-        file_url: Optional[Union[str, List[str]]] = None,
-        cursor: Optional[str] = None,
-        row_start: Optional[int] = None,
-        page_size: Optional[int] = None,
-        format: str = "summary",
+        query: Annotated[Optional[str], Field(description=(
+            "Full-text search. Every word must match: 'hydrology in Alaska' "
+            "runs as (hydrology AND Alaska), with filler words such as 'in' "
+            "and 'datasets' removed. Quote a phrase (\"soil carbon\"), or "
+            "write AND, OR, or NOT yourself to control the logic."
+        ))] = None,
+        creator: Annotated[Optional[str], Field(
+            description="Filter by dataset creator name."
+        )] = None,
+        provider_name: Annotated[Optional[str], Field(description=(
+            "Filter by exact project/provider name, e.g. 'NGEE Arctic'. This "
+            "is not a place filter."
+        ))] = None,
+        date_published: Annotated[Optional[str], Field(
+            description="Publication date filter, e.g. '[2016 TO 2023]'."
+        )] = None,
+        begin_date: Annotated[Optional[str], Field(description=(
+            "Temporal coverage window start: YYYY, YYYY-MM, or YYYY-MM-DD."
+        ))] = None,
+        end_date: Annotated[Optional[str], Field(description=(
+            "Temporal coverage window end: YYYY, YYYY-MM, or YYYY-MM-DD."
+        ))] = None,
+        keywords: Annotated[Optional[Union[str, List[str]]], Field(description=(
+            "Exact, case-sensitive match on the curated keyword field, which "
+            "many datasets lack. Multiple keywords must ALL match, so lists "
+            "shrink results fast. Use query, not keywords, for places and "
+            "broad topics."
+        ))] = None,
+        sort: Annotated[Optional[str], Field(description=(
+            "Sort string, e.g. 'name:asc' or "
+            "'dateUploaded:desc,authorLastName:asc'. Results default to newest "
+            "upload first, not relevance."
+        ))] = None,
+        bbox: Annotated[Optional[Union[str, List[float]]], Field(description=(
+            "Bounding box in LATITUDE-FIRST order: "
+            "'min_lat,min_lon,max_lat,max_lon' or the same as a list. This is "
+            "not GeoJSON order. Boxes cannot cross the 180 degree meridian; "
+            "search each side separately."
+        ))] = None,
+        lat: Annotated[Optional[float], Field(description=(
+            "Latitude for a point search. Requires lon and radius."
+        ))] = None,
+        lon: Annotated[Optional[float], Field(description=(
+            "Longitude for a point search. Requires lat and radius."
+        ))] = None,
+        radius: Annotated[Optional[float], Field(description=(
+            "Point search radius in METERS, not kilometers: 100 km is 100000."
+        ))] = None,
+        creator_affiliation: Annotated[Optional[Union[str, List[str]]], Field(
+            description=f"Creator affiliation text. {LOCAL_FILTER_NOTE}"
+        )] = None,
+        variable_measured: Annotated[Optional[Union[str, List[str]]], Field(
+            description=f"variableMeasured values. {LOCAL_FILTER_NOTE}"
+        )] = None,
+        measurement_technique: Annotated[Optional[Union[str, List[str]]], Field(
+            description=f"measurementTechnique text. {LOCAL_FILTER_NOTE}"
+        )] = None,
+        funder: Annotated[Optional[Union[str, List[str]]], Field(
+            description=f"Funder names or IDs. {LOCAL_FILTER_NOTE}"
+        )] = None,
+        license: Annotated[Optional[Union[str, List[str]]], Field(
+            description=f"Dataset license text or URL. {LOCAL_FILTER_NOTE}"
+        )] = None,
+        alternate_name: Annotated[Optional[Union[str, List[str]]], Field(
+            description=f"alternateName values. {LOCAL_FILTER_NOTE}"
+        )] = None,
+        editor: Annotated[Optional[Union[str, List[str]]], Field(
+            description=f"Dataset contact/editor metadata. {LOCAL_FILTER_NOTE}"
+        )] = None,
+        file_format: Annotated[Optional[Union[str, List[str]]], Field(
+            description=f"File encodingFormat values. {LOCAL_FILTER_NOTE}"
+        )] = None,
+        file_name: Annotated[Optional[Union[str, List[str]]], Field(
+            description=f"File names. {LOCAL_FILTER_NOTE}"
+        )] = None,
+        file_url: Annotated[Optional[Union[str, List[str]]], Field(
+            description=f"File content URLs. {LOCAL_FILTER_NOTE}"
+        )] = None,
+        cursor: Annotated[Optional[str], Field(description=(
+            "Opaque cursor for a follow-up page. Prefer next-search-page."
+        ))] = None,
+        row_start: Annotated[Optional[int], Field(description=(
+            "Legacy row number to start on when not using cursor pagination."
+        ))] = None,
+        page_size: Annotated[Optional[int], Field(description=(
+            "Results per page, maximum 100. Omit on cursor follow-ups unless "
+            "it matches the cursor."
+        ))] = None,
+        format: Annotated[str, Field(
+            description="Result format: summary, detailed, or raw."
+        )] = "summary",
         ctx: Context = None,
     ) -> str:
-        """
-        Search for datasets in the ESS-DIVE repository.
-
-        This tool stores session-specific pagination state. If the user later
-        asks for more results, the next page, the previous page, or to continue
-        this same result set, use `next-search-page` or `previous-search-page`
-        rather than calling `search-datasets` again with the same filters.
-
-        Args:
-            query: Search query text (full-text search)
-            creator: Filter by dataset creator
-            provider_name: Filter by dataset project/provider
-            date_published: Filter by publication date (e.g., "[2016 TO 2023]")
-            begin_date: Temporal coverage window start date (YYYY, YYYY-MM, or YYYY-MM-DD)
-            end_date: Temporal coverage window end date (YYYY, YYYY-MM, or YYYY-MM-DD)
-            keywords: Search for datasets with specific keywords (string or list of strings)
-            sort: Optional sort string, e.g. "name:asc" or "dateUploaded:desc,authorLastName:asc"
-            bbox: Bounding box search as "min_lat,min_lon,max_lat,max_lon" or [min_lat, min_lon, max_lat, max_lon]
-            lat: Latitude for point-based nearby search
-            lon: Longitude for point-based nearby search
-            radius: Search radius in meters for point-based nearby search
-            creator_affiliation: Local post-filter on creator affiliation text
-            variable_measured: Local post-filter on variableMeasured values
-            measurement_technique: Local post-filter on measurementTechnique text
-            funder: Local post-filter on funder names/IDs
-            license: Local post-filter on dataset license text/URL
-            alternate_name: Local post-filter on alternateName values
-            editor: Local post-filter on dataset contact/editor metadata
-            file_format: Local post-filter on distribution encodingFormat values
-            file_name: Local post-filter on distribution file names
-            file_url: Local post-filter on distribution content URLs
-            cursor: Opaque cursor for a follow-up page of search results
-            row_start: Legacy row number to start on when not using cursor pagination
-            page_size: Number of results per page; omit on cursor follow-up unless it matches the cursor
-            format: Format of the results (summary, detailed, raw)
-
-        Examples:
-            search-datasets with query="soil carbon" and page_size=10
-            search-datasets with creator="Smith" and provider_name="NGEE Arctic"
-            search-datasets with begin_date="2020" and end_date="2021-06" and format="detailed"
-            search-datasets with query="soil carbon" and sort="name:asc"
-            search-datasets with query="BIONTE" and cursor="opaque-cursor"
-            search-datasets with bbox=[34.0, -119.0, 35.0, -117.0]
-            search-datasets with lat=37.7749 and lon=-122.4194 and radius=5000
-            search-datasets with query="snowmelt" and creator_affiliation="Pennsylvania"
-            search-datasets with provider_name="SPRUCE" and variable_measured=["temperature", "CO2"]
-
-        Returns:
-            Formatted search results
-        """
+        """Search for datasets; clients see SEARCH_DATASETS_DESCRIPTION instead."""
         LOGGER.debug(
             "Tool search-datasets called query=%r creator=%r provider_name=%r begin_date=%r end_date=%r sort=%r cursor=%r bbox=%r lat=%r lon=%r radius=%r local_filters=%r row_start=%s page_size=%s format=%s",
             query,

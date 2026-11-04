@@ -134,9 +134,13 @@ _SEARCH_FILLER_WORDS = frozenset({
 _SEARCH_OPERATORS = frozenset({"AND", "OR", "NOT", "&&", "||"})
 _SEARCH_TOKEN_PATTERN = re.compile(r'"[^"]*"|\S+')
 _SEARCH_EDGE_PUNCTUATION = ".,;:!?()[]{}\"'"
+# Filtering fetches each dataset's full record, at about 7 records per second, so
+# this bounds one tool call to roughly 30 seconds. Later calls resume the scan.
+LOCAL_FILTER_SCAN_LIMIT = 200
 LOCAL_FILTER_NOTE = (
-    "Local post-filter: applied only to the current page of API results, so "
-    "matches on later pages are not counted."
+    "Local post-filter: the server scans API results until it fills a page of "
+    f"matches or has scanned {LOCAL_FILTER_SCAN_LIMIT} datasets. If the result "
+    "says the scan is partial, next-search-page continues it."
 )
 PROJECTS_SOURCE_PATH = str(Path(projects_module.__file__).resolve())
 
@@ -1014,7 +1018,70 @@ async def _execute_dataset_search_request(
 ) -> Dict[str, Any]:
     """Run an ESS-DIVE search and apply any local metadata filters."""
     result = await client.search_datasets(**search_kwargs)
-    return await _apply_local_dataset_filters(client, result, local_filters)
+    if not any(local_filters.values()):
+        return result
+    return await _scan_for_local_matches(
+        client, result, search_kwargs=search_kwargs, local_filters=local_filters
+    )
+
+
+async def _scan_for_local_matches(
+    client: "ESSDiveClient",
+    first_page: Dict[str, Any],
+    *,
+    search_kwargs: Dict[str, Any],
+    local_filters: Dict[str, List[str]],
+) -> Dict[str, Any]:
+    """Filter successive API pages until a page of matches is found or the limit hits.
+
+    Matches can sit on any page, so filtering only the first page undercounts
+    them. `total` stays None unless the whole result set was scanned, because
+    any number short of that is a partial count.
+    """
+    wanted = len(first_page.get("result", []))
+    page = first_page
+    matches: List[Dict[str, Any]] = []
+    scanned = 0
+
+    while True:
+        filtered = await _apply_local_dataset_filters(client, page, local_filters)
+        matches.extend(filtered["result"])
+        scanned += len(page.get("result", []))
+        next_cursor = page.get("nextCursor")
+        if (
+            not next_cursor
+            or len(matches) >= wanted
+            or scanned >= LOCAL_FILTER_SCAN_LIMIT
+        ):
+            break
+        page = await client.search_datasets(
+            **{
+                **search_kwargs,
+                "cursor": next_cursor,
+                "row_start": None,
+                "page_size": None,
+            }
+        )
+
+    started_at_beginning = (
+        not search_kwargs.get("cursor") and (search_kwargs.get("row_start") or 1) == 1
+    )
+    complete = started_at_beginning and not next_cursor
+
+    merged = dict(filtered)
+    merged["result"] = matches
+    merged["total"] = len(matches) if complete else None
+    merged.pop("previousCursor", None)
+    if first_page.get("previousCursor"):
+        merged["previousCursor"] = first_page["previousCursor"]
+    merged["filtering"] = {
+        **filtered["filtering"],
+        "native_total": first_page.get("total"),
+        "scanned_results": scanned,
+        "matched_results": len(matches),
+        "complete": complete,
+    }
+    return merged
 
 
 def _render_formatted_output(
@@ -2596,13 +2663,23 @@ class ESSDiveClient:
         if filtering:
             native_total = filtering.get("native_total")
             scanned_results = filtering.get("scanned_results")
-            header = (
-                f"Found {total} datasets after local metadata filtering. "
-                f"Scanned {scanned_results} API results"
-            )
-            if native_total is not None:
-                header += f" from {native_total} native matches"
-            header += ":\n\n"
+            if filtering.get("complete", True):
+                header = (
+                    f"Found {total} datasets after local metadata filtering. "
+                    f"Scanned {scanned_results} API results"
+                )
+                if native_total is not None:
+                    header += f" from {native_total} native matches"
+                header += ":\n\n"
+            else:
+                header = (
+                    f"Showing {len(datasets)} matches from a partial scan after "
+                    f"local metadata filtering. Scanned {scanned_results} API "
+                    "results in this request"
+                )
+                if native_total is not None:
+                    header += f" of {native_total} native matches"
+                header += ", so the total number of matches is not known:\n\n"
         else:
             header = f"Found {total} datasets. Showing {len(datasets)} results:\n\n"
 

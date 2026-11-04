@@ -22,6 +22,8 @@ from essdive_mcp.main import (
     search_projects,
     _dataset_matches_local_filters,
     _normalize_search_text,
+    _execute_dataset_search_request,
+    LOCAL_FILTER_SCAN_LIMIT,
     _apply_local_dataset_filters,
     _default_dataset_search_is_public,
     _resolve_startup_api_token,
@@ -3334,3 +3336,158 @@ class TestNormalizeSearchText:
             result = await ESSDiveClient().search_datasets(text="Alaska")
 
         assert "appliedText" not in result
+
+
+def _paged_filter_client(pages):
+    """Build a client over fake API pages; ids starting with 'hit' match a filter."""
+    client = ESSDiveClient()
+    responses = {None: pages[0]}
+    for index, page in enumerate(pages[:-1]):
+        page["nextCursor"] = f"cursor-{index + 1}"
+        responses[page["nextCursor"]] = pages[index + 1]
+    for index, page in enumerate(pages[1:]):
+        page["previousCursor"] = f"back-{index}"
+
+    async def search_datasets(**kwargs):
+        return dict(responses[kwargs.get("cursor")])
+
+    async def get_dataset(identifier):
+        variables = ["temperature"] if identifier.startswith("hit") else ["pH"]
+        return {"dataset": {"variableMeasured": variables}}
+
+    client.search_datasets = AsyncMock(side_effect=search_datasets)
+    client.get_dataset = AsyncMock(side_effect=get_dataset)
+    return client
+
+
+def _fake_page(ids, total):
+    return {"total": total, "result": [{"id": item} for item in ids]}
+
+
+class TestLocalFilterScan:
+    """Local filters must not report one page of matches as the whole answer."""
+
+    FILTERS = {"variable_measured": ["temperature"]}
+
+    @pytest.mark.asyncio
+    async def test_scans_later_pages_and_reports_a_true_total(self):
+        client = _paged_filter_client([
+            _fake_page(["miss-1", "hit-1"], 5),
+            _fake_page(["miss-2", "miss-3"], 5),
+            _fake_page(["hit-2"], 5),
+        ])
+
+        result = await _execute_dataset_search_request(
+            client, search_kwargs={"text": "Alaska"}, local_filters=self.FILTERS
+        )
+
+        assert [item["id"] for item in result["result"]] == ["hit-1", "hit-2"]
+        assert result["total"] == 2
+        assert result["filtering"]["complete"] is True
+        assert result["filtering"]["scanned_results"] == 5
+        assert result["filtering"]["native_total"] == 5
+        assert "nextCursor" not in result
+
+    @pytest.mark.asyncio
+    async def test_stops_once_a_page_of_matches_is_full(self):
+        client = _paged_filter_client([
+            _fake_page(["hit-1", "miss-1"], 6),
+            _fake_page(["hit-2", "hit-3"], 6),
+            _fake_page(["hit-4", "hit-5"], 6),
+        ])
+
+        result = await _execute_dataset_search_request(
+            client, search_kwargs={"text": "Alaska"}, local_filters=self.FILTERS
+        )
+
+        assert [item["id"] for item in result["result"]] == [
+            "hit-1", "hit-2", "hit-3",
+        ]
+        assert result["total"] is None
+        assert result["filtering"]["complete"] is False
+        assert result["nextCursor"] == "cursor-2"
+        assert client.search_datasets.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_stops_at_the_scan_limit_and_keeps_the_cursor(self):
+        page_size = 50
+        pages = [
+            _fake_page([f"miss-{page}-{row}" for row in range(page_size)], 1000)
+            for page in range(20)
+        ]
+        client = _paged_filter_client(pages)
+
+        result = await _execute_dataset_search_request(
+            client, search_kwargs={"text": "Alaska"}, local_filters=self.FILTERS
+        )
+
+        assert result["filtering"]["scanned_results"] == LOCAL_FILTER_SCAN_LIMIT
+        assert result["result"] == []
+        assert result["total"] is None
+        assert result["nextCursor"] == "cursor-4"
+
+    @pytest.mark.asyncio
+    async def test_follow_up_scan_is_never_called_complete(self):
+        """Reaching the end from a cursor says nothing about earlier pages."""
+        client = _paged_filter_client([
+            _fake_page(["hit-1"], 2),
+            _fake_page(["hit-2"], 2),
+        ])
+
+        result = await _execute_dataset_search_request(
+            client,
+            search_kwargs={"text": "Alaska", "cursor": "cursor-1"},
+            local_filters=self.FILTERS,
+        )
+
+        assert result["total"] is None
+        assert result["filtering"]["complete"] is False
+        assert "nextCursor" not in result
+
+    @pytest.mark.asyncio
+    async def test_keeps_the_first_pages_previous_cursor(self):
+        client = _paged_filter_client([
+            _fake_page(["miss-1"], 3),
+            _fake_page(["miss-2"], 3),
+            _fake_page(["hit-1"], 3),
+        ])
+
+        result = await _execute_dataset_search_request(
+            client,
+            search_kwargs={"text": "Alaska", "cursor": "cursor-1"},
+            local_filters=self.FILTERS,
+        )
+
+        assert result["previousCursor"] == "back-0"
+
+    @pytest.mark.asyncio
+    async def test_search_without_filters_makes_one_request(self):
+        client = _paged_filter_client([
+            _fake_page(["hit-1"], 2),
+            _fake_page(["hit-2"], 2),
+        ])
+
+        result = await _execute_dataset_search_request(
+            client, search_kwargs={"text": "Alaska"}, local_filters={"funder": []}
+        )
+
+        assert client.search_datasets.await_count == 1
+        assert result["total"] == 2
+        assert "filtering" not in result
+
+    def test_partial_scan_header_does_not_claim_a_total(self):
+        formatted = ESSDiveClient().format_results({
+            "total": None,
+            "result": [],
+            "nextCursor": "cursor-1",
+            "filtering": {
+                "native_total": 364,
+                "scanned_results": 200,
+                "complete": False,
+            },
+        })
+
+        assert "Found" not in formatted
+        assert "Scanned 200 API results in this request of 364" in formatted
+        assert "total number of matches is not known" in formatted
+        assert "next-search-page" in formatted

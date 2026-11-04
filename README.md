@@ -572,7 +572,7 @@ Try prompts like:
 ## Example Results
 
 The exact results will change over time as ESS-DIVE and ESS-DeepDive are updated, but successful queries should look roughly like this.
-The post-filtering examples below were re-checked against the live ESS-DIVE API on April 2, 2026.
+The post-filtering examples below were re-checked against the live ESS-DIVE API on November 4, 2026.
 
 ### Dataset search example
 
@@ -615,9 +615,9 @@ Write `AND`, `OR`, or `NOT` in capitals to control the logic yourself. Requiring
 These examples use a two-step pattern:
 
 1. run a native ESS-DIVE `/packages` search
-2. fetch full metadata for the current result page and filter locally on fields such as `creator.affiliation`, `variableMeasured`, `funder`, or file formats
+2. fetch full metadata page by page and filter locally on fields such as `creator.affiliation`, `variableMeasured`, `funder`, or file formats
 
-That means `page_size` and `row_start` matter. The examples below used `page_size=5`, so the local filter examined the first 5 native matches.
+The scan continues until it has filled a page of matches or has examined 200 datasets, which takes about 30 seconds. If it reaches the end of the results, the header gives the true total. Otherwise the header says the scan is partial, and `next-search-page` continues from where it stopped. Going back with `previous-search-page` can repeat some matches, because it rescans forward from one API page earlier. The examples below used `page_size=5`, and excerpts show up to 3 results.
 
 Prompt:
 
@@ -634,16 +634,17 @@ search-datasets with query="East River" and creator_affiliation="Lawrence Berkel
 Example result excerpt:
 
 ```text
-Found 3 datasets after local metadata filtering. Scanned 5 API results from 307 native matches:
+Showing 5 matches from a partial scan after local metadata filtering. Scanned 10 API results in this request of 257 native matches, so the total number of matches is not known:
+Search text sent to ESS-DIVE: (East AND River)
 
-1. Data for "Depth of nutrient uptake by deep-rooted plants is regulated by water availability"
-   ID: ess-dive-4c1829de1b8a2ec-20260401T171210416
+1. Montane Conifer, Aspen, Meadow, and Sagebrush Metagenome Resolved Genomes and Traits in East River Watershed, Colorado, USA
+   ID: ess-dive-ed1840c6c2f6989-20261002T230711121
 
-2. Mountain Basin Controls on the Snow-to-Streamflow Signal: An AIC-Weighted Multiple Linear Regression Framework
-   ID: ess-dive-a63ff0854da2d62-20260330T232846064
+2. Depth-resolved sagebrush root metabolomics, rhizosphere microbial communities, and geochemistry at the East River Watershed
+   ID: ess-dive-c1c7af0e11cbe63-20260928T163645472
 
-3. CHESS 2025: Leaf Area Index (LAI) for meadow, shrub, tree, and understory vegetation
-   ID: ess-dive-6d3178c5222ea40-20260327T145831553
+3. Geophysical survey associated with NEON AOP survey, East River, CO 2018
+   ID: ess-dive-460e696d8210ed3-20260903T221739840
 ```
 
 Prompt:
@@ -661,10 +662,14 @@ search-datasets with query="East River" and variable_measured="streamflow" and p
 Example result excerpt:
 
 ```text
-Found 1 datasets after local metadata filtering. Scanned 5 API results from 307 native matches:
+Showing 2 matches from a partial scan after local metadata filtering. Scanned 200 API results in this request of 257 native matches, so the total number of matches is not known:
+Search text sent to ESS-DIVE: (East AND River)
 
 1. Mountain Basin Controls on the Snow-to-Streamflow Signal: An AIC-Weighted Multiple Linear Regression Framework
    ID: ess-dive-a63ff0854da2d62-20260330T232846064
+
+2. Data From: "Warming and snow loss increase reliance on old groundwater in a Colorado River headwater"
+   ID: ess-dive-b37ee89b955f195-20260218T023053041649
 ```
 
 Prompt:
@@ -682,10 +687,17 @@ search-datasets with query="East River" and funder="NASA" and page_size=5
 Example result excerpt:
 
 ```text
-Found 1 datasets after local metadata filtering. Scanned 5 API results from 307 native matches:
+Showing 5 matches from a partial scan after local metadata filtering. Scanned 45 API results in this request of 257 native matches, so the total number of matches is not known:
+Search text sent to ESS-DIVE: (East AND River)
 
-1. Site and endmember spectra of terrestrial vegetation and soils for the Colorado Headwaters Ecological Spectroscopy Study, June-July 2025
-   ID: ess-dive-c938a042bca2b42-20260327T150016394
+1. Model Inputs, Outputs, and Scripts for Advanced Terrestrial Simulator (ATS) Simulations of Summer Rainfall Variability Effects on Supra-Permafrost Thermal Hydrology, Imnavait Creek Hillslope, North Slope, Alaska (Forcing Derived from 1981–2020).
+   ID: ess-dive-0e1fd212fee225f-20261014T194645495
+
+2. Custom surface reflectance, shade mask, and equivalent water thickness maps for the Colorado Headwaters Ecological Spectroscopy Study (2025)
+   ID: ess-dive-0ae8705d725686a-20260810T184056626
+
+3. CHESS 2025: Field-collected vegetation attributes and site photos
+   ID: ess-dive-c867baa5f602eed-20260506T011608834
 ```
 
 ### Identifier conversion example

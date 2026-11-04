@@ -41,6 +41,7 @@ from essdive_mcp.main import (
     _fetch_crossref_work,
     _looks_like_doi_identifier,
 )
+import inspect
 import pytest
 import sys
 import os
@@ -3225,8 +3226,8 @@ def test_reality():
     assert 1 == 1
 
 
-def _search_datasets_tool():
-    """Return search-datasets as clients see it, by capturing the real server."""
+def _all_tools():
+    """Return every tool as clients see it, by capturing the real server."""
     captured = {}
 
     async def capture_server(self):
@@ -3237,21 +3238,69 @@ def _search_datasets_tool():
             patch.object(main_module, "_resolve_startup_api_token", return_value=None):
         main_module.main()
 
-    return next(
-        tool for tool in captured["tools"] if tool.name == "search-datasets"
-    )
+    return {tool.name: tool for tool in captured["tools"]}
+
+
+def _search_datasets_tool():
+    return _all_tools()["search-datasets"]
+
+
+class TestToolSchemas:
+    """Tool guidance must reach clients, not sit in an unread docstring."""
+
+    def test_every_parameter_of_every_tool_is_described(self):
+        undescribed = [
+            f"{tool.name}.{name}"
+            for tool in _all_tools().values()
+            for name, schema in tool.input_schema.get("properties", {}).items()
+            if not schema.get("description")
+        ]
+        assert undescribed == []
+
+    def test_every_tool_has_a_description_without_a_duplicate_args_section(self):
+        for tool in _all_tools().values():
+            assert tool.description, tool.name
+            assert "Args:" not in tool.description, tool.name
+
+    def test_descriptions_carry_no_source_indentation(self):
+        for tool in _all_tools().values():
+            assert tool.description == inspect.cleandoc(tool.description), tool.name
+
+    def test_parameter_rules_that_silently_lose_results_are_stated(self):
+        tools = _all_tools()
+
+        def description(tool, parameter):
+            properties = tools[tool].input_schema["properties"]
+            return properties[parameter]["description"]
+
+        assert "MUST" in description("search-ess-deepdive", "doi")
+        assert "doi:" in description("search-ess-deepdive", "doi")
+        assert "bare" in description("get-dataset", "id")
+        assert "bare" in description("generate-data-citation", "id")
+        assert "maximum 10" in description("get-dataset-versions", "page_size")
+        assert "LATITUDE-FIRST" in description("coords-to-map-links", "bbox")
+        assert "LATITUDE-FIRST" in description("coords-to-map-links", "points")
+
+    def test_token_requirements_are_stated(self):
+        tools = _all_tools()
+        assert "requires an ESS-DIVE API token" in tools["get-dataset-status"].description
+        assert "requires an ESS-DIVE API token" in tools["get-dataset-permissions"].description
+
+    def test_citation_search_parameters_match_search_datasets(self):
+        tools = _all_tools()
+        search = tools["search-datasets"].input_schema["properties"]
+        citation = tools["generate-data-citation"].input_schema["properties"]
+        for name in ("query", "keywords", "provider_name", "sort", "begin_date"):
+            assert citation[name]["description"] == search[name]["description"]
+
+    def test_citation_precedence_is_stated(self):
+        assert "first\nthat applies wins" in (
+            _all_tools()["generate-data-citation"].description
+        )
 
 
 class TestSearchDatasetsToolSchema:
     """The parameter rules must reach clients, not sit in an unread docstring."""
-
-    def test_every_parameter_is_described(self):
-        properties = _search_datasets_tool().input_schema["properties"]
-        undescribed = [
-            name for name, schema in properties.items()
-            if not schema.get("description")
-        ]
-        assert undescribed == []
 
     def test_easily_misused_parameters_state_their_rules(self):
         properties = _search_datasets_tool().input_schema["properties"]

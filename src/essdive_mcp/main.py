@@ -59,6 +59,7 @@ Authentication:
   requests such as private-data access.
 """
 import asyncio
+import inspect
 import os
 import argparse
 import json
@@ -121,7 +122,7 @@ Examples:
   bbox=[51.0, -180.0, 72.0, -129.0]
   lat=37.7749 and lon=-122.4194 and radius=5000
   query="snowmelt" and creator_affiliation="Pennsylvania"
-"""
+""".strip()
 # Words that say what the user wants rather than what the dataset contains. Solr
 # already ignores some of these, but others ("from", "datasets") match only part
 # of the catalog, so requiring them would quietly drop real results.
@@ -142,6 +143,61 @@ LOCAL_FILTER_NOTE = (
     f"matches or has scanned {LOCAL_FILTER_SCAN_LIMIT} datasets. If the result "
     "says the scan is partial, next-search-page continues it."
 )
+
+# Tool parameters that several tools share, so their rules cannot drift apart.
+DATASET_ID_FORMAT = (
+    "Use an ESS-DIVE dataset ID (ess-dive-...) or a DOI with its prefix "
+    "(doi:10.xxxx/...). A bare 10.xxxx/... DOI is not found."
+)
+DatasetIdParam = Annotated[str, Field(description=DATASET_ID_FORMAT)]
+ResultFormatParam = Annotated[str, Field(
+    description="Result format: summary, detailed, or raw."
+)]
+FormatOverrideParam = Annotated[Optional[str], Field(description=(
+    "Result format: summary, detailed, or raw. Omit to keep the format of the "
+    "original request."
+))]
+SearchQueryParam = Annotated[Optional[str], Field(description=(
+    "Full-text search. Every word must match: 'hydrology in Alaska' runs as "
+    "(hydrology AND Alaska), with filler words such as 'in' and 'datasets' "
+    "removed. Quote a phrase (\"soil carbon\"), or write AND, OR, or NOT "
+    "yourself to control the logic."
+))]
+SearchCreatorParam = Annotated[Optional[str], Field(
+    description="Filter by dataset creator name."
+)]
+SearchProviderParam = Annotated[Optional[str], Field(description=(
+    "Filter by exact project/provider name, e.g. 'NGEE Arctic'. This is not a "
+    "place filter."
+))]
+SearchDatePublishedParam = Annotated[Optional[str], Field(
+    description="Publication date filter, e.g. '[2016 TO 2023]'."
+)]
+SearchBeginDateParam = Annotated[Optional[str], Field(description=(
+    "Temporal coverage window start: YYYY, YYYY-MM, or YYYY-MM-DD."
+))]
+SearchEndDateParam = Annotated[Optional[str], Field(description=(
+    "Temporal coverage window end: YYYY, YYYY-MM, or YYYY-MM-DD."
+))]
+SearchKeywordsParam = Annotated[Optional[Union[str, List[str]]], Field(description=(
+    "Exact, case-sensitive match on the curated keyword field, which many "
+    "datasets lack. Multiple keywords must ALL match, so lists shrink results "
+    "fast. Use query, not keywords, for places and broad topics."
+))]
+SearchSortParam = Annotated[Optional[str], Field(description=(
+    "Sort string, e.g. 'name:asc' or 'dateUploaded:desc,authorLastName:asc'. "
+    "Results default to newest upload first, not relevance."
+))]
+SearchRowStartParam = Annotated[Optional[int], Field(description=(
+    "Legacy row number to start on when not using cursor pagination."
+))]
+DeepDiveDoiParam = Annotated[str, Field(
+    description="The dataset DOI, with or without the doi: prefix."
+)]
+DeepDiveFilePathParam = Annotated[str, Field(description=(
+    "The data_file value from a search-ess-deepdive result, e.g. 'data.csv' or "
+    "'archive.zip/data.csv'."
+))]
 PROJECTS_SOURCE_PATH = str(Path(projects_module.__file__).resolve())
 
 # Pagination-state key used when the transport carries no session identity of
@@ -3243,6 +3299,7 @@ def essdive_id_to_doi(essdive_id: str, api_token: Optional[str] = None) -> str:
 
 # ESS-DeepDive API functions
 ESS_DEEPDIVE_BASE_URL = "https://fusion.ess-dive.lbl.gov/api/v1/deepdive"
+DEEPDIVE_MAX_PAGE_SIZE = 100
 
 
 def search_ess_deepdive(
@@ -3281,7 +3338,7 @@ def search_ess_deepdive(
     """
     params: Dict[str, Any] = {
         "rowStart": row_start,
-        "pageSize": min(page_size, 100),  # Enforce max limit
+        "pageSize": min(page_size, DEEPDIVE_MAX_PAGE_SIZE),
     }
 
     if field_name:
@@ -3299,7 +3356,8 @@ def search_ess_deepdive(
     if record_count_max is not None:
         params["recordCountMax"] = record_count_max
     if doi:
-        params["doi"] = doi[:100]  # Enforce max 100 DOIs
+        # The API matches only the doi: form and returns nothing for the others.
+        params["doi"] = [_normalize_doi(item) for item in doi[:100]]
 
     LOGGER.debug("ESS-DeepDive search request url=%s params=%s",
                  ESS_DEEPDIVE_BASE_URL, params)
@@ -3316,6 +3374,76 @@ def search_ess_deepdive(
         len(result.get("results", [])) if isinstance(result, dict) else "n/a",
     )
     return result
+
+
+def _run_deepdive_search(
+    search_kwargs: Dict[str, Any],
+    *,
+    row_start: int,
+    page_size: int,
+    max_pages: Optional[int],
+) -> Dict[str, Any]:
+    """Run a DeepDive search over one or more pages and describe what is left.
+
+    The API's `pageCount` is the number of rows on the current page, not the
+    number of pages, and it gives no overall total. Its `next` link is set on
+    any full page, even the last one, so it means only that more may exist.
+    """
+    rows_per_page = min(page_size, DEEPDIVE_MAX_PAGE_SIZE)
+
+    if not max_pages or max_pages <= 1:
+        result = search_ess_deepdive(
+            **search_kwargs, row_start=row_start, page_size=page_size
+        )
+        if result.get("next"):
+            result["pagination_info"] = {
+                "page_size": rows_per_page,
+                "results_on_page": len(result.get("results", [])),
+                "next_row_start": row_start + rows_per_page,
+                "note": (
+                    "More results may be available. Use max_pages to fetch "
+                    "several pages, or row_start to continue."
+                ),
+            }
+        return result
+
+    all_results: List[Dict[str, Any]] = []
+    current_row = row_start
+    pages_fetched = 0
+    more_available = True
+
+    while more_available and pages_fetched < max_pages:
+        LOGGER.debug(
+            "search-ess-deepdive pagination loop page_index=%s current_row=%s",
+            pages_fetched + 1,
+            current_row,
+        )
+        result = search_ess_deepdive(
+            **search_kwargs, row_start=current_row, page_size=page_size
+        )
+        page_results = result.get("results", [])
+        if not page_results:
+            more_available = False
+            break
+        all_results.extend(page_results)
+        pages_fetched += 1
+        more_available = bool(result.get("next"))
+        current_row += rows_per_page
+
+    collected: Dict[str, Any] = {
+        "results": all_results,
+        "total_results_fetched": len(all_results),
+        "pages_fetched": pages_fetched,
+    }
+    if more_available:
+        collected["next_row_start"] = current_row
+        collected["note"] = (
+            f"Fetched {pages_fetched} pages and more results may be available. "
+            "Raise max_pages or use next_row_start as row_start to continue."
+        )
+    else:
+        collected["note"] = f"Fetched all remaining results in {pages_fetched} pages."
+    return collected
 
 
 def get_ess_deepdive_dataset(doi: str, file_path: str) -> Dict[str, Any]:
@@ -3515,45 +3643,32 @@ def main():
     # Create the MCP server
     server = MCPServer("essdive_mcp", lifespan=server_lifespan)
 
+    def register_tool(name: str) -> Callable[[Callable], Callable]:
+        """Register a tool whose cleaned docstring is its client-facing description.
+
+        The MCP library sends a raw __doc__, which keeps source indentation on
+        Python versions before 3.13.
+        """
+
+        def decorate(fn: Callable) -> Callable:
+            return server.tool(name=name, description=inspect.getdoc(fn))(fn)
+
+        return decorate
+
     # Register tool functions
     @server.tool(
         name="search-datasets",
         description=SEARCH_DATASETS_DESCRIPTION,
     )
     async def search_datasets(
-        query: Annotated[Optional[str], Field(description=(
-            "Full-text search. Every word must match: 'hydrology in Alaska' "
-            "runs as (hydrology AND Alaska), with filler words such as 'in' "
-            "and 'datasets' removed. Quote a phrase (\"soil carbon\"), or "
-            "write AND, OR, or NOT yourself to control the logic."
-        ))] = None,
-        creator: Annotated[Optional[str], Field(
-            description="Filter by dataset creator name."
-        )] = None,
-        provider_name: Annotated[Optional[str], Field(description=(
-            "Filter by exact project/provider name, e.g. 'NGEE Arctic'. This "
-            "is not a place filter."
-        ))] = None,
-        date_published: Annotated[Optional[str], Field(
-            description="Publication date filter, e.g. '[2016 TO 2023]'."
-        )] = None,
-        begin_date: Annotated[Optional[str], Field(description=(
-            "Temporal coverage window start: YYYY, YYYY-MM, or YYYY-MM-DD."
-        ))] = None,
-        end_date: Annotated[Optional[str], Field(description=(
-            "Temporal coverage window end: YYYY, YYYY-MM, or YYYY-MM-DD."
-        ))] = None,
-        keywords: Annotated[Optional[Union[str, List[str]]], Field(description=(
-            "Exact, case-sensitive match on the curated keyword field, which "
-            "many datasets lack. Multiple keywords must ALL match, so lists "
-            "shrink results fast. Use query, not keywords, for places and "
-            "broad topics."
-        ))] = None,
-        sort: Annotated[Optional[str], Field(description=(
-            "Sort string, e.g. 'name:asc' or "
-            "'dateUploaded:desc,authorLastName:asc'. Results default to newest "
-            "upload first, not relevance."
-        ))] = None,
+        query: SearchQueryParam = None,
+        creator: SearchCreatorParam = None,
+        provider_name: SearchProviderParam = None,
+        date_published: SearchDatePublishedParam = None,
+        begin_date: SearchBeginDateParam = None,
+        end_date: SearchEndDateParam = None,
+        keywords: SearchKeywordsParam = None,
+        sort: SearchSortParam = None,
         bbox: Annotated[Optional[Union[str, List[float]]], Field(description=(
             "Bounding box in LATITUDE-FIRST order: "
             "'min_lat,min_lon,max_lat,max_lon' or the same as a list. This is "
@@ -3602,16 +3717,12 @@ def main():
         cursor: Annotated[Optional[str], Field(description=(
             "Opaque cursor for a follow-up page. Prefer next-search-page."
         ))] = None,
-        row_start: Annotated[Optional[int], Field(description=(
-            "Legacy row number to start on when not using cursor pagination."
-        ))] = None,
+        row_start: SearchRowStartParam = None,
         page_size: Annotated[Optional[int], Field(description=(
             "Results per page, maximum 100. Omit on cursor follow-ups unless "
             "it matches the cursor."
         ))] = None,
-        format: Annotated[str, Field(
-            description="Result format: summary, detailed, or raw."
-        )] = "summary",
+        format: ResultFormatParam = "summary",
         ctx: Context = None,
     ) -> str:
         """Search for datasets; clients see SEARCH_DATASETS_DESCRIPTION instead."""
@@ -3742,24 +3853,15 @@ def main():
                 ),
             )
 
-    @server.tool(
-        name="next-search-page",
-        description=(
-            "Show the next page of the most recent dataset search in this MCP "
-            "session. Use this for user requests like more, next page, continue, "
-            "or show more results after search-datasets; do not repeat the "
-            "original search."
-        ),
-    )
-    async def next_search_page(format: Optional[str] = None, ctx: Context = None) -> str:
+    @register_tool("next-search-page")
+    async def next_search_page(format: FormatOverrideParam = None, ctx: Context = None) -> str:
         """
-        Show the next page of the most recent dataset search.
+        Show the next page of the most recent dataset search in this MCP session.
 
-        This tool reuses the last dataset-search filters and paging context stored by
-        `search-datasets`, so callers do not need to manage pagination cursors directly.
-
-        Args:
-            format: Optional override for the output format (summary, detailed, raw)
+        Use this for user requests like more, next page, continue, or show more
+        results after search-datasets; do not repeat the original search. It
+        reuses the stored filters and paging context, so callers do not manage
+        pagination cursors directly.
 
         Returns:
             Formatted next page of dataset search results
@@ -3794,23 +3896,14 @@ def main():
                 context=_context_without_none({"format": format}),
             )
 
-    @server.tool(
-        name="previous-search-page",
-        description=(
-            "Show the previous page of the most recent dataset search in this "
-            "MCP session. Use this when the user asks to go back, previous page, "
-            "or show earlier results from the active search."
-        ),
-    )
-    async def previous_search_page(format: Optional[str] = None, ctx: Context = None) -> str:
+    @register_tool("previous-search-page")
+    async def previous_search_page(format: FormatOverrideParam = None, ctx: Context = None) -> str:
         """
-        Show the previous page of the most recent dataset search.
+        Show the previous page of the most recent dataset search in this MCP session.
 
-        This tool reuses the last dataset-search filters and paging context stored by
-        `search-datasets`, so callers do not need to manage pagination cursors directly.
-
-        Args:
-            format: Optional override for the output format (summary, detailed, raw)
+        Use this when the user asks to go back, previous page, or show earlier
+        results from the active search. It reuses the stored filters and paging
+        context, so callers do not manage pagination cursors directly.
 
         Returns:
             Formatted previous page of dataset search results
@@ -3844,17 +3937,10 @@ def main():
                 context=_context_without_none({"format": format}),
             )
 
-    @server.tool(
-        name="get-dataset",
-        description="Get detailed information about a specific dataset",
-    )
-    async def get_dataset(id: str, format: str = "detailed") -> str:
+    @register_tool("get-dataset")
+    async def get_dataset(id: DatasetIdParam, format: ResultFormatParam = "detailed") -> str:
         """
         Get detailed information about a specific dataset.
-
-        Args:
-            id: ESS-DIVE dataset identifier
-            format: Format of the results (summary, detailed, raw)
 
         Examples:
             get-dataset with id="ess-dive-9ea5fe57db73c90-20241024T093714082510"
@@ -3881,64 +3967,64 @@ def main():
                 context=_context_without_none({"id": id, "format": format}),
             )
 
-    @server.tool(
-        name="generate-data-citation",
-        description="Generate a consistent data citation with MCP/API access details",
-    )
+    @register_tool("generate-data-citation")
     async def generate_data_citation(
-        id: Optional[str] = None,
-        ids: Optional[List[str]] = None,
-        dataset_metadata: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]] = None,
-        query: Optional[str] = None,
-        creator: Optional[str] = None,
-        provider_name: Optional[str] = None,
-        date_published: Optional[str] = None,
-        begin_date: Optional[str] = None,
-        end_date: Optional[str] = None,
-        keywords: Optional[Union[str, List[str]]] = None,
-        sort: Optional[str] = None,
-        cursor: Optional[str] = None,
-        row_start: Optional[int] = None,
-        page_size: Optional[int] = None,
-        access_date: Optional[str] = None,
-        access_method: str = DEFAULT_ESSDIVE_ACCESS_METHOD,
+        id: Annotated[Optional[str], Field(description=(
+            f"Dataset to cite. {DATASET_ID_FORMAT} Ignored if ids, "
+            "dataset_metadata, or any search parameter is also given."
+        ))] = None,
+        ids: Annotated[Optional[List[str]], Field(description=(
+            "Dataset IDs or DOIs to cite, in order. Same formats as id."
+        ))] = None,
+        dataset_metadata: Annotated[
+            Optional[Union[Dict[str, Any], List[Dict[str, Any]]]],
+            Field(description=(
+                "Raw package metadata, search response, or result list, such as "
+                "format=\"raw\" output from get-dataset or search-datasets."
+            )),
+        ] = None,
+        query: SearchQueryParam = None,
+        creator: SearchCreatorParam = None,
+        provider_name: SearchProviderParam = None,
+        date_published: SearchDatePublishedParam = None,
+        begin_date: SearchBeginDateParam = None,
+        end_date: SearchEndDateParam = None,
+        keywords: SearchKeywordsParam = None,
+        sort: SearchSortParam = None,
+        cursor: Annotated[Optional[str], Field(
+            description="Opaque cursor for a follow-up page of search results."
+        )] = None,
+        row_start: SearchRowStartParam = None,
+        page_size: Annotated[Optional[int], Field(description=(
+            "Number of search results to cite, maximum 100. Giving this alone "
+            "runs a search, so do not combine it with id."
+        ))] = None,
+        access_date: Annotated[Optional[str], Field(description=(
+            "Access date in YYYY-MM-DD format. Defaults to today."
+        ))] = None,
+        access_method: Annotated[str, Field(description=(
+            "Phrase that follows \"accessed via\" in the citation."
+        ))] = DEFAULT_ESSDIVE_ACCESS_METHOD,
     ) -> str:
         """
-        Generate a consistent data citation.
+        Generate a consistent data citation with MCP/API access details.
 
-        Provide either an ESS-DIVE dataset identifier/DOI in `id` or a package
-        metadata object such as the raw output from `get-dataset`. You can also
-        provide `ids` for multiple identifiers, or pass the raw output from
-        `search-datasets`, `next-search-page`, or `previous-search-page` as
-        `dataset_metadata` to return citations for all result items. Existing
-        `citation` fields are reused when available; missing search-result
-        citations are filled by fetching `/packages/{identifier}`.
+        Choose one way to name the datasets. If several are given, the first
+        that applies wins, in this order:
 
-        To generate citations directly from a dataset search page, provide
-        `query` and/or other search filters such as `provider_name`, `creator`,
-        `date_published`, `keywords`, `sort`, `cursor`, `row_start`, or
-        `page_size`.
+        1. `ids`, for multiple identifiers.
+        2. `dataset_metadata`, such as raw output from `get-dataset`,
+           `search-datasets`, `next-search-page`, or `previous-search-page`,
+           which cites all result items.
+        3. Search parameters such as `query` or `provider_name`, which cite one
+           page of search results. Unlike `search-datasets`, this tool has no
+           bbox, point, or metadata post-filters.
+        4. `id`, for a single dataset.
 
+        Existing `citation` fields are reused when available; missing
+        search-result citations are filled by fetching `/packages/{identifier}`.
         When an identifier is a DOI outside ESS-DIVE, the tool warns and tries
         Crossref.
-
-        Args:
-            id: ESS-DIVE dataset identifier or DOI to fetch before formatting
-            ids: ESS-DIVE dataset identifiers or DOIs to cite in order
-            dataset_metadata: Raw package metadata, search response, or result list
-            query: Search query text for citation extraction from a package list
-            creator: Filter search citations by dataset creator
-            provider_name: Filter search citations by dataset project/provider
-            date_published: Filter search citations by publication date
-            begin_date: Temporal coverage window start date
-            end_date: Temporal coverage window end date
-            keywords: Search citations for datasets with specific keywords
-            sort: Optional search sort string
-            cursor: Opaque cursor for a follow-up search page
-            row_start: Legacy search row number to start on when not using cursor pagination
-            page_size: Number of search results to cite
-            access_date: Optional access date in YYYY-MM-DD format; defaults to today
-            access_method: Access phrase after "accessed via"; defaults to MCP/API usage
 
         Examples:
             generate-data-citation with id="doi:10.15485/3014404"
@@ -4060,20 +4146,19 @@ def main():
                 ),
             )
 
-    @server.tool(
-        name="get-dataset-status",
-        description="Get publication/workflow status information for a specific dataset",
-    )
-    async def get_dataset_status_tool(id: str) -> str:
+    @register_tool("get-dataset-status")
+    async def get_dataset_status_tool(
+        id: Annotated[str, Field(
+            description="ESS-DIVE dataset identifier (ess-dive-...)."
+        )],
+    ) -> str:
         """
-        Get workflow/status information for a dataset from the status endpoint.
+        Get publication/workflow status information for a specific dataset.
 
-        Use this tool when the user explicitly asks for a dataset's status rather than
-        its general metadata. For multiple datasets, call the tool once per identifier.
-        This endpoint may require an ESS-DIVE API token and appropriate dataset access.
-
-        Args:
-            id: ESS-DIVE dataset identifier
+        Use this tool when the user explicitly asks for a dataset's status rather
+        than its general metadata. For multiple datasets, call the tool once per
+        identifier. This endpoint requires an ESS-DIVE API token, even for public
+        datasets, and appropriate dataset access.
 
         Examples:
             get-dataset-status with id="ess-dive-f78cb03d11550da-20260309T160313214"
@@ -4093,35 +4178,27 @@ def main():
                 context={"id": id},
             )
 
-    @server.tool(
-        name="get-dataset-versions",
-        description=(
-            "List visible versions of a specific dataset from newest to oldest. "
-            "This stores session pagination state; when the user asks for more "
-            "versions or the next/previous page, call next-dataset-versions-page "
-            "or previous-dataset-versions-page instead of repeating this request."
-        ),
-    )
+    @register_tool("get-dataset-versions")
     async def get_dataset_versions_tool(
-        id: str,
-        page_size: Optional[int] = None,
-        cursor: Optional[str] = None,
-        format: str = "summary",
+        id: DatasetIdParam,
+        page_size: Annotated[Optional[int], Field(description=(
+            "Number of versions to return, maximum 10. Larger values are "
+            "rejected. The API default is 10."
+        ))] = None,
+        cursor: Annotated[Optional[str], Field(description=(
+            "Opaque cursor from a previous versions response. Prefer "
+            "next-dataset-versions-page."
+        ))] = None,
+        format: ResultFormatParam = "summary",
         ctx: Context = None,
     ) -> str:
         """
-        List visible versions for a dataset from newest to oldest.
+        List visible versions of a specific dataset from newest to oldest.
 
-        This tool stores session-specific pagination state. If the user later
-        asks for more versions, the next page, the previous page, or to continue
-        this same version history, use `next-dataset-versions-page` or
-        `previous-dataset-versions-page` rather than repeating this request.
-
-        Args:
-            id: ESS-DIVE dataset identifier or DOI
-            page_size: Optional number of versions to return (API default: 10, max: 10)
-            cursor: Optional opaque cursor from a previous versions response
-            format: Format of the results (summary, detailed, raw)
+        This stores session pagination state. When the user asks for more
+        versions, the next page, the previous page, or to continue this same
+        version history, call `next-dataset-versions-page` or
+        `previous-dataset-versions-page` instead of repeating this request.
 
         Examples:
             get-dataset-versions with id="doi:10.15485/2529445"
@@ -4169,24 +4246,14 @@ def main():
                 ),
             )
 
-    @server.tool(
-        name="next-dataset-versions-page",
-        description=(
-            "Show the next page of the most recent dataset-version history "
-            "request in this MCP session. Use this for more, next page, or "
-            "continue requests after get-dataset-versions."
-        ),
-    )
-    async def next_dataset_versions_page(format: Optional[str] = None, ctx: Context = None) -> str:
+    @register_tool("next-dataset-versions-page")
+    async def next_dataset_versions_page(format: FormatOverrideParam = None, ctx: Context = None) -> str:
         """
         Show the next page of the most recent dataset-version history request.
 
-        This tool reuses the last version-history paging context stored by
-        `get-dataset-versions`, so callers do not need to manage pagination cursors
-        directly.
-
-        Args:
-            format: Optional override for the output format (summary, detailed, raw)
+        Use this for more, next page, or continue requests after
+        get-dataset-versions. It reuses the stored paging context, so callers do
+        not manage pagination cursors directly.
 
         Returns:
             Formatted next page of dataset version history
@@ -4218,24 +4285,14 @@ def main():
                 context=_context_without_none({"format": format}),
             )
 
-    @server.tool(
-        name="previous-dataset-versions-page",
-        description=(
-            "Show the previous page of the most recent dataset-version history "
-            "request in this MCP session. Use this when the user asks to go "
-            "back or show earlier version-history results."
-        ),
-    )
-    async def previous_dataset_versions_page(format: Optional[str] = None, ctx: Context = None) -> str:
+    @register_tool("previous-dataset-versions-page")
+    async def previous_dataset_versions_page(format: FormatOverrideParam = None, ctx: Context = None) -> str:
         """
         Show the previous page of the most recent dataset-version history request.
 
-        This tool reuses the last version-history paging context stored by
-        `get-dataset-versions`, so callers do not need to manage pagination cursors
-        directly.
-
-        Args:
-            format: Optional override for the output format (summary, detailed, raw)
+        Use this when the user asks to go back or show earlier version-history
+        results. It reuses the stored paging context, so callers do not manage
+        pagination cursors directly.
 
         Returns:
             Formatted previous page of dataset version history
@@ -4267,23 +4324,19 @@ def main():
                 context=_context_without_none({"format": format}),
             )
 
-    @server.tool(
-        name="parse-flmd-file",
-        description="Parse a File Level Metadata (FLMD) CSV file and extract file descriptions",
-    )
-    async def parse_flmd_file_tool(content: str) -> str:
+    @register_tool("parse-flmd-file")
+    async def parse_flmd_file_tool(
+        content: Annotated[str, Field(description=(
+            "The full text of the FLMD CSV file, including its header row, not "
+            "a file path or URL."
+        ))],
+    ) -> str:
         """
-        Parse an FLMD (File Level Metadata) file and return a mapping of filenames to descriptions.
+        Parse a File Level Metadata (FLMD) CSV file and extract file descriptions.
 
-        FLMD files are CSV files that contain metadata about data files, with columns for
-        filename and file description. This tool normalizes the CSV headers and extracts
-        the filename-description mapping.
-
-        Args:
-            content: The FLMD CSV file content as a string
-
-        Examples:
-            parse-flmd-file with content="filename,file_description\nfile1.csv,Soil moisture\n"
+        FLMD files are CSV files that contain metadata about data files, with
+        columns for filename and file description. This tool normalizes the CSV
+        headers and extracts the filename-description mapping.
 
         Returns:
             JSON string mapping filenames to their descriptions
@@ -4302,19 +4355,17 @@ def main():
                 context={"content_length": content_length},
             )
 
-    @server.tool(
-        name="get-dataset-permissions",
-        description="Get sharing permissions for a specific dataset",
-    )
-    async def get_dataset_permissions_tool(id: str) -> str:
+    @register_tool("get-dataset-permissions")
+    async def get_dataset_permissions_tool(
+        id: Annotated[str, Field(
+            description="ESS-DIVE dataset identifier (ess-dive-...)."
+        )],
+    ) -> str:
         """
-        Get sharing permissions information for a dataset.
+        Get sharing permissions for a specific dataset.
 
-        This endpoint returns the sharing permissions for a dataset, including
-        who has access and what permissions they have.
-
-        Args:
-            id: ESS-DIVE dataset identifier
+        This returns who has access to a dataset and what permissions they have.
+        This endpoint requires an ESS-DIVE API token, even for public datasets.
 
         Examples:
             get-dataset-permissions with id="ess-dive-9ea5fe57db73c90-20241024T093714082510"
@@ -4334,20 +4385,20 @@ def main():
                 context={"id": id},
             )
 
-    @server.tool(
-        name="lookup-project-portal",
-        description="Look up ESS-DIVE-related project names, acronyms, descriptions, and portal URLs",
-    )
-    def lookup_project_portal_tool(query: Optional[str] = None, limit: int = 10) -> str:
+    @register_tool("lookup-project-portal")
+    def lookup_project_portal_tool(
+        query: Annotated[Optional[str], Field(description=(
+            "Project acronym, name, or alias. Omit to list projects up to limit."
+        ))] = None,
+        limit: Annotated[int, Field(description=(
+            "Maximum number of matches to return. Must be greater than 0."
+        ))] = 10,
+    ) -> str:
         """
-        Look up project background information from the shared ESS-DIVE project reference list.
+        Look up ESS-DIVE-related project names, acronyms, descriptions, and portal URLs.
 
         This is useful when users mention an acronym or project name, such as CHESS,
         and the agent needs a quick expansion plus a URL for more context.
-
-        Args:
-            query: Optional project acronym, name, or alias to search for
-            limit: Maximum number of matches to return
 
         Examples:
             lookup-project-portal with query="CHESS"
@@ -4371,25 +4422,24 @@ def main():
                     {"query": query, "limit": limit}),
             )
 
-    @server.tool(
-        name="coords-to-map-links",
-        description=(
-            "Convert points or a bounding box to map links (geojson.io, OpenStreetMap, "
-            "Google Maps, Google Earth KML)"
-        ),
-    )
+    @register_tool("coords-to-map-links")
     def coords_to_map_links(
-        points: Optional[List[List[float]]] = None,
-        bbox: Optional[List[float]] = None,
-        zoom: Optional[int] = None,
+        points: Annotated[Optional[List[List[float]]], Field(description=(
+            "List of points in LATITUDE-FIRST order, each [lat, lon], e.g. "
+            "[[38.92, -106.95], [38.93, -106.94]]. Provide points, bbox, or both."
+        ))] = None,
+        bbox: Annotated[Optional[List[float]], Field(description=(
+            "Bounding box in LATITUDE-FIRST order: "
+            "[min_lat, min_lon, max_lat, max_lon]. This is not GeoJSON order."
+        ))] = None,
+        zoom: Annotated[Optional[int], Field(description=(
+            "Map zoom level for the center view links."
+        ))] = None,
     ) -> str:
         """
-        Convert coordinates to viewable map links.
+        Convert points or a bounding box to map links.
 
-        Args:
-            points: List of [lat, lon] points (e.g., [[38.92, -106.95], [38.93, -106.94]])
-            bbox: [min_lat, min_lon, max_lat, max_lon]
-            zoom: Optional zoom level for geojson.io center view (if provided)
+        Links cover geojson.io, OpenStreetMap, Google Maps, and Google Earth KML.
 
         Examples:
             coords-to-map-links with points=[[38.9219, -106.9490]]
@@ -4496,28 +4546,19 @@ def main():
                 },
             )
 
-    @server.tool(
-        name="doi-to-essdive-id",
-        description="Convert a DOI to an ESS-DIVE dataset ID",
-    )
-    def doi_to_essdive_id_tool(doi: str) -> str:
+    @register_tool("doi-to-essdive-id")
+    def doi_to_essdive_id_tool(
+        doi: Annotated[str, Field(description=(
+            "A DOI in any common format: doi:10.xxxx/..., 10.xxxx/..., or "
+            "https://doi.org/10.xxxx/..."
+        ))],
+    ) -> str:
         """
         Convert a Digital Object Identifier (DOI) to an ESS-DIVE dataset ID.
 
-        This tool queries the ESS-DIVE API to retrieve the dataset metadata
-        for a given DOI and returns the corresponding ESS-DIVE dataset identifier.
-
-        The DOI can be provided in any common format:
-        - doi:10.xxxx/...
-        - 10.xxxx/...
-        - https://doi.org/10.xxxx/...
-        - http://doi.org/10.xxxx/...
-
-        This is useful when you have a DOI but need to use tools that require
-        the ESS-DIVE dataset ID instead.
-
-        Args:
-            doi: A DOI in any common format
+        This queries the ESS-DIVE API for the dataset metadata for a DOI and
+        returns the corresponding ESS-DIVE dataset identifier. Use it when you
+        have a DOI but need a tool that requires the ESS-DIVE dataset ID.
 
         Examples:
             doi-to-essdive-id with doi="10.15485/2453885"
@@ -4544,24 +4585,18 @@ def main():
                 context={"doi": doi},
             )
 
-    @server.tool(
-        name="essdive-id-to-doi",
-        description="Convert an ESS-DIVE dataset ID to a DOI",
-    )
-    def essdive_id_to_doi_tool(essdive_id: str) -> str:
+    @register_tool("essdive-id-to-doi")
+    def essdive_id_to_doi_tool(
+        essdive_id: Annotated[str, Field(
+            description="An ESS-DIVE dataset identifier (ess-dive-...)."
+        )],
+    ) -> str:
         """
         Convert an ESS-DIVE dataset ID to a Digital Object Identifier (DOI).
 
-        This tool queries the ESS-DIVE API to retrieve the dataset metadata
-        for a given ESS-DIVE ID and returns the corresponding DOI.
-
-        The returned DOI is normalized to the format: doi:10.xxxx/...
-
-        This is useful when you have an ESS-DIVE dataset ID but need to use
-        tools or services that require the DOI instead.
-
-        Args:
-            essdive_id: An ESS-DIVE dataset identifier
+        This queries the ESS-DIVE API for the dataset metadata for an ESS-DIVE ID
+        and returns the corresponding DOI, normalized to doi:10.xxxx/... Use it
+        when a tool or service requires the DOI instead.
 
         Examples:
             essdive-id-to-doi with essdive_id="ess-dive-9ea5fe57db73c90-20241024T093714082510"
@@ -4587,45 +4622,61 @@ def main():
                 context={"essdive_id": essdive_id},
             )
 
-    @server.tool(
-        name="search-ess-deepdive",
-        description="Search the ESS-DeepDive fusion database for data fields and variables",
-    )
+    @register_tool("search-ess-deepdive")
     def search_ess_deepdive_tool(
-        field_name: Optional[str] = None,
-        field_definition: Optional[str] = None,
-        field_value_text: Optional[str] = None,
-        field_value_numeric: Optional[Union[int, float]] = None,
-        field_value_date: Optional[str] = None,
-        record_count_min: Optional[int] = None,
-        record_count_max: Optional[int] = None,
-        doi: Optional[str] = None,
-        row_start: int = 1,
-        page_size: int = 25,
-        max_pages: Optional[int] = None,
+        field_name: Annotated[Optional[str], Field(description=(
+            "Part of a field name, matched case-insensitively, max 100 "
+            "characters. 'temp' finds HOBO_Temp_C. Spaces are matched "
+            "literally, so 'soil temperature' does not find "
+            "Soil_Temperature; use one word or the underscore."
+        ))] = None,
+        field_definition: Annotated[Optional[str], Field(description=(
+            "Words in a field definition, max 100 characters. Words must appear "
+            "in this order. Common terms such as 'soil' can fail with a server "
+            "error; if so, use a more specific term or add a doi filter."
+        ))] = None,
+        field_value_text: Annotated[Optional[str], Field(
+            description="Text field value, matched case-insensitively."
+        )] = None,
+        field_value_numeric: Annotated[Optional[Union[int, float]], Field(description=(
+            "Number that falls between a field's minimum and maximum values."
+        ))] = None,
+        field_value_date: Annotated[Optional[str], Field(description=(
+            "Date value as yyyy-mm-dd or yyyy-mm-ddTHH:MM:SS."
+        ))] = None,
+        record_count_min: Annotated[Optional[int], Field(
+            description="Minimum record count for a field."
+        )] = None,
+        record_count_max: Annotated[Optional[int], Field(
+            description="Maximum record count for a field."
+        )] = None,
+        doi: Annotated[Optional[str], Field(description=(
+            "DOI filter in any common format, comma-separated for multiple, up "
+            "to 100."
+        ))] = None,
+        row_start: Annotated[int, Field(
+            description="Row to start on, counting from 1."
+        )] = 1,
+        page_size: Annotated[int, Field(
+            description="Results per page. Values above 100 are reduced to 100."
+        )] = 25,
+        max_pages: Annotated[Optional[int], Field(description=(
+            "Maximum number of pages to fetch and combine in this one call. "
+            "Omit to fetch a single page. The API gives no overall total, so "
+            "the result only says whether more may be available."
+        ))] = None,
     ) -> str:
         """
         Search the ESS-DeepDive fusion database for data fields and values.
 
         The ESS-DeepDive database contains raw data from many ESS-DIVE datasets.
-        Search by field names, definitions, values, or record counts.
-
-        Args:
-            field_name: Search for a specific field name (max 100 chars)
-            field_definition: Search field definitions (max 100 chars)
-            field_value_text: Search for text field values (case insensitive)
-            field_value_numeric: Filter by numeric value
-            field_value_date: Filter by date value (yyyy-mm-dd or yyyy-mm-ddTHH:MM:SS)
-            record_count_min: Filter by minimum record count
-            record_count_max: Filter by maximum record count
-            doi: Filter by DOI (comma-separated for multiple)
-            row_start: The starting row for pagination (default: 1)
-            page_size: Number of results per page (max: 100, default: 25)
-            max_pages: Maximum number of pages to fetch (optional, for large result sets)
+        Search by field names, definitions, values, or record counts. Each result
+        is one field in one file; its `doi` and `data_file` values can be passed
+        to `get-ess-deepdive-file`. Not every ESS-DIVE dataset is included.
 
         Examples:
             search-ess-deepdive with field_name="temperature" and record_count_min=100
-            search-ess-deepdive with doi="10.15485/2453885" and field_definition="soil"
+            search-ess-deepdive with doi="doi:10.15485/2587853" and field_definition="soil"
 
         Returns:
             JSON string containing search results with field metadata and pagination info.
@@ -4640,86 +4691,26 @@ def main():
             max_pages,
         )
         try:
-            # Parse DOI string if provided
             doi_list = None
             if doi:
-                doi_list = [d.strip() for d in doi.split(",")]
+                doi_list = [item.strip() for item in doi.split(",") if item.strip()]
 
-            # If max_pages is specified, paginate through results
-            if max_pages and max_pages > 1:
-                all_results = []
-                current_row = row_start
-                pages_fetched = 0
-
-                while pages_fetched < max_pages:
-                    LOGGER.debug(
-                        "search-ess-deepdive pagination loop page_index=%s current_row=%s",
-                        pages_fetched + 1,
-                        current_row,
-                    )
-                    result = search_ess_deepdive(
-                        field_name=field_name,
-                        field_definition=field_definition,
-                        field_value_text=field_value_text,
-                        field_value_numeric=field_value_numeric,
-                        field_value_date=field_value_date,
-                        record_count_min=record_count_min,
-                        record_count_max=record_count_max,
-                        doi=doi_list,
-                        row_start=current_row,
-                        page_size=page_size,
-                    )
-
-                    # Collect results from this page
-                    if "results" in result:
-                        all_results.extend(result["results"])
-
-                    # Check if there are more pages
-                    page_count = result.get("pageCount", 0)
-                    if not page_count or page_count <= 1:
-                        # No more pages available
-                        break
-
-                    pages_fetched += 1
-                    current_row += page_size
-
-                # Return combined results with metadata
-                return json.dumps(
-                    {
-                        "results": all_results,
-                        "total_results_fetched": len(all_results),
-                        "pages_fetched": pages_fetched + 1,
-                        "note": f"Fetched {pages_fetched + 1} pages. Use row_start and page_size to fetch additional pages.",
-                    },
-                    indent=2,
-                )
-            else:
-                # Single page request
-                result = search_ess_deepdive(
-                    field_name=field_name,
-                    field_definition=field_definition,
-                    field_value_text=field_value_text,
-                    field_value_numeric=field_value_numeric,
-                    field_value_date=field_value_date,
-                    record_count_min=record_count_min,
-                    record_count_max=record_count_max,
-                    doi=doi_list,
-                    row_start=row_start,
-                    page_size=page_size,
-                )
-
-                # Add helpful pagination info to response
-                page_count = result.get("pageCount", 0)
-                if page_count and page_count > 1:
-                    result["pagination_info"] = {
-                        "current_page": 1,
-                        "total_pages": page_count,
-                        "page_size": page_size,
-                        "next_row_start": row_start + page_size,
-                        "note": "Use max_pages parameter to automatically fetch all pages, or manually paginate using row_start",
-                    }
-
-                return json.dumps(result, indent=2)
+            result = _run_deepdive_search(
+                {
+                    "field_name": field_name,
+                    "field_definition": field_definition,
+                    "field_value_text": field_value_text,
+                    "field_value_numeric": field_value_numeric,
+                    "field_value_date": field_value_date,
+                    "record_count_min": record_count_min,
+                    "record_count_max": record_count_max,
+                    "doi": doi_list,
+                },
+                row_start=row_start,
+                page_size=page_size,
+                max_pages=max_pages,
+            )
+            return json.dumps(result, indent=2)
         except Exception as exc:
             return _tool_error_response(
                 "search-ess-deepdive",
@@ -4742,23 +4733,19 @@ def main():
                 ),
             )
 
-    @server.tool(
-        name="get-ess-deepdive-dataset",
-        description="Get detailed field information for a specific dataset file in ESS-DeepDive",
-    )
-    def get_ess_deepdive_dataset_tool(doi: str, file_path: str) -> str:
+    @register_tool("get-ess-deepdive-dataset")
+    def get_ess_deepdive_dataset_tool(
+        doi: DeepDiveDoiParam,
+        file_path: DeepDiveFilePathParam,
+    ) -> str:
         """
         Get detailed field information for a specific dataset file in ESS-DeepDive.
 
         This retrieves all fields and their definitions for a specific file in the
         ESS-DeepDive fusion database.
 
-        Args:
-            doi: The DOI of the dataset (with or without 'doi:' prefix)
-            file_path: The file path within the dataset
-
         Examples:
-            get-ess-deepdive-dataset with doi="10.15485/2453885" and file_path="dataset.zip/data.csv"
+            get-ess-deepdive-dataset with doi="10.15485/2587853" and file_path="NExpt_ESSDIVE_Datafile.csv"
 
         Returns:
             JSON string containing detailed field information
@@ -4779,15 +4766,15 @@ def main():
                 context={"doi": doi, "file_path": file_path},
             )
 
-    @server.tool(
-        name="get-ess-deepdive-file",
-        description="Retrieve detailed information about a specific file from ESS-DeepDive",
-    )
-    def get_ess_deepdive_file_tool(doi: str, file_path: str) -> str:
+    @register_tool("get-ess-deepdive-file")
+    def get_ess_deepdive_file_tool(
+        doi: DeepDiveDoiParam,
+        file_path: DeepDiveFilePathParam,
+    ) -> str:
         """
-        Retrieve detailed information about a specific file from ESS-DeepDive (Get-Dataset-File endpoint).
+        Retrieve detailed information about a specific file from ESS-DeepDive.
 
-        This endpoint returns comprehensive information about a data file, including:
+        This returns comprehensive information about a data file, including:
         - All field names and their definitions
         - Data types and summary statistics for each field
         - File metadata and download information
@@ -4796,12 +4783,8 @@ def main():
         Use this after finding a file of interest from search-ess-deepdive results
         to get complete field-level metadata before downloading.
 
-        Args:
-            doi: The DOI of the dataset (with or without 'doi:' prefix, format: doi:10.xxxx/...)
-            file_path: The file path within the dataset (e.g., "dataset.zip/data.csv")
-
         Examples:
-            get-ess-deepdive-file with doi="doi:10.15485/2453885" and file_path="dataset.zip/data.csv"
+            get-ess-deepdive-file with doi="doi:10.15485/2587853" and file_path="NExpt_ESSDIVE_Datafile.csv"
 
         Returns:
             JSON string containing file information with all field metadata and download URLs

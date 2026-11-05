@@ -22,6 +22,7 @@ from essdive_mcp.main import (
     search_projects,
     _dataset_matches_local_filters,
     _normalize_search_text,
+    _run_deepdive_search,
     _execute_dataset_search_request,
     LOCAL_FILTER_SCAN_LIMIT,
     _apply_local_dataset_filters,
@@ -41,6 +42,7 @@ from essdive_mcp.main import (
     _fetch_crossref_work,
     _looks_like_doi_identifier,
 )
+import inspect
 import pytest
 import sys
 import os
@@ -3016,7 +3018,7 @@ class TestSearchEssDeepDive:
 
             call_args = mock_get.call_args
             params = call_args[1].get("params", {})
-            assert params["doi"] == ["10.1234/test", "10.5678/test"]
+            assert params["doi"] == ["doi:10.1234/test", "doi:10.5678/test"]
 
     def test_search_ess_deepdive_enforces_max_doi_count(self):
         """Test that DOI list is limited to 100 items."""
@@ -3225,8 +3227,8 @@ def test_reality():
     assert 1 == 1
 
 
-def _search_datasets_tool():
-    """Return search-datasets as clients see it, by capturing the real server."""
+def _all_tools():
+    """Return every tool as clients see it, by capturing the real server."""
     captured = {}
 
     async def capture_server(self):
@@ -3237,21 +3239,67 @@ def _search_datasets_tool():
             patch.object(main_module, "_resolve_startup_api_token", return_value=None):
         main_module.main()
 
-    return next(
-        tool for tool in captured["tools"] if tool.name == "search-datasets"
-    )
+    return {tool.name: tool for tool in captured["tools"]}
+
+
+def _search_datasets_tool():
+    return _all_tools()["search-datasets"]
+
+
+class TestToolSchemas:
+    """Tool guidance must reach clients, not sit in an unread docstring."""
+
+    def test_every_parameter_of_every_tool_is_described(self):
+        undescribed = [
+            f"{tool.name}.{name}"
+            for tool in _all_tools().values()
+            for name, schema in tool.input_schema.get("properties", {}).items()
+            if not schema.get("description")
+        ]
+        assert undescribed == []
+
+    def test_every_tool_has_a_description_without_a_duplicate_args_section(self):
+        for tool in _all_tools().values():
+            assert tool.description, tool.name
+            assert "Args:" not in tool.description, tool.name
+
+    def test_descriptions_carry_no_source_indentation(self):
+        for tool in _all_tools().values():
+            assert tool.description == inspect.cleandoc(tool.description), tool.name
+
+    def test_parameter_rules_that_silently_lose_results_are_stated(self):
+        tools = _all_tools()
+
+        def description(tool, parameter):
+            properties = tools[tool].input_schema["properties"]
+            return properties[parameter]["description"]
+
+        assert "bare" in description("get-dataset", "id")
+        assert "bare" in description("generate-data-citation", "id")
+        assert "maximum 10" in description("get-dataset-versions", "page_size")
+        assert "LATITUDE-FIRST" in description("coords-to-map-links", "bbox")
+        assert "LATITUDE-FIRST" in description("coords-to-map-links", "points")
+
+    def test_token_requirements_are_stated(self):
+        tools = _all_tools()
+        assert "requires an ESS-DIVE API token" in tools["get-dataset-status"].description
+        assert "requires an ESS-DIVE API token" in tools["get-dataset-permissions"].description
+
+    def test_citation_search_parameters_match_search_datasets(self):
+        tools = _all_tools()
+        search = tools["search-datasets"].input_schema["properties"]
+        citation = tools["generate-data-citation"].input_schema["properties"]
+        for name in ("query", "keywords", "provider_name", "sort", "begin_date"):
+            assert citation[name]["description"] == search[name]["description"]
+
+    def test_citation_precedence_is_stated(self):
+        assert "first\nthat applies wins" in (
+            _all_tools()["generate-data-citation"].description
+        )
 
 
 class TestSearchDatasetsToolSchema:
     """The parameter rules must reach clients, not sit in an unread docstring."""
-
-    def test_every_parameter_is_described(self):
-        properties = _search_datasets_tool().input_schema["properties"]
-        undescribed = [
-            name for name, schema in properties.items()
-            if not schema.get("description")
-        ]
-        assert undescribed == []
 
     def test_easily_misused_parameters_state_their_rules(self):
         properties = _search_datasets_tool().input_schema["properties"]
@@ -3491,3 +3539,112 @@ class TestLocalFilterScan:
         assert "Scanned 200 API results in this request of 364" in formatted
         assert "total number of matches is not known" in formatted
         assert "next-search-page" in formatted
+
+
+class TestDeepDiveDoiFilter:
+    """The API returns nothing for DOIs without the doi: prefix."""
+
+    @pytest.mark.parametrize("doi", [
+        "doi:10.15485/2587853",
+        "10.15485/2587853",
+        "https://doi.org/10.15485/2587853",
+    ])
+    def test_common_forms_are_sent_with_the_prefix(self, doi):
+        response = Mock()
+        response.json.return_value = {"results": [], "pageCount": 0}
+        with patch("essdive_mcp.main.requests.get", return_value=response) as get:
+            search_ess_deepdive(doi=[doi])
+
+        assert get.call_args.kwargs["params"]["doi"] == ["doi:10.15485/2587853"]
+
+
+def _deepdive_pages(*row_counts):
+    """Fake API pages; pageCount is rows on the page, as in the real API."""
+    pages = []
+    for index, count in enumerate(row_counts):
+        pages.append({
+            "pageCount": count,
+            "results": [{"field_name": f"p{index}-{row}"} for row in range(count)],
+            "next": "next-url" if index < len(row_counts) - 1 else None,
+        })
+    return pages
+
+
+class TestDeepDivePagination:
+    """Paging must follow the next link, because pageCount counts rows."""
+
+    KWARGS = {"field_name": "temperature"}
+
+    def _run(self, pages, **kwargs):
+        with patch(
+            "essdive_mcp.main.search_ess_deepdive", side_effect=pages
+        ) as search:
+            result = _run_deepdive_search(self.KWARGS, **kwargs)
+        return result, search
+
+    def test_single_page_reports_what_it_can_know(self):
+        result, _ = self._run(
+            _deepdive_pages(25, 25), row_start=26, page_size=25, max_pages=None
+        )
+
+        assert result["pagination_info"] == {
+            "page_size": 25,
+            "results_on_page": 25,
+            "next_row_start": 51,
+            "note": result["pagination_info"]["note"],
+        }
+
+    def test_last_page_has_no_pagination_info(self):
+        result, _ = self._run(
+            _deepdive_pages(25), row_start=1, page_size=25, max_pages=None
+        )
+
+        assert "pagination_info" not in result
+
+    def test_oversized_page_size_uses_the_real_step(self):
+        result, _ = self._run(
+            _deepdive_pages(100, 100), row_start=1, page_size=500, max_pages=None
+        )
+
+        assert result["pagination_info"]["next_row_start"] == 101
+
+    def test_stops_at_max_pages_and_counts_them_correctly(self):
+        result, search = self._run(
+            _deepdive_pages(2, 2, 2), row_start=1, page_size=2, max_pages=2
+        )
+
+        assert search.call_count == 2
+        assert result["pages_fetched"] == 2
+        assert result["total_results_fetched"] == 4
+        assert result["next_row_start"] == 5
+        assert "more results may be available" in result["note"]
+
+    def test_stops_when_the_next_link_ends(self):
+        result, search = self._run(
+            _deepdive_pages(2, 1), row_start=1, page_size=2, max_pages=5
+        )
+
+        assert search.call_count == 2
+        assert result["pages_fetched"] == 2
+        assert result["total_results_fetched"] == 3
+        assert "next_row_start" not in result
+
+    def test_empty_page_after_a_full_last_page_is_not_counted(self):
+        """The API sets next on any full page, even when nothing follows."""
+        pages = _deepdive_pages(2, 2, 0)
+        pages[1]["next"] = "next-url"
+
+        result, search = self._run(pages, row_start=1, page_size=2, max_pages=5)
+
+        assert search.call_count == 3
+        assert result["pages_fetched"] == 2
+        assert "next_row_start" not in result
+
+    def test_one_row_page_does_not_end_the_scan_early(self):
+        """A pageCount of 1 used to look like the final page."""
+        result, search = self._run(
+            _deepdive_pages(1, 1, 1), row_start=1, page_size=1, max_pages=5
+        )
+
+        assert search.call_count == 3
+        assert result["total_results_fetched"] == 3
